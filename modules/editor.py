@@ -104,7 +104,8 @@ class VideoEditor:
                 audio_codec='aac',
                 fps=30,
                 preset='medium',
-                verbose=False
+                verbose=False,
+                logger=None  # Fix for GitHub
             )
             
             # Cleanup

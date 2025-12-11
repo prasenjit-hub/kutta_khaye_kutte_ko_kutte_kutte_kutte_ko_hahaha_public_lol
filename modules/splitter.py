@@ -60,6 +60,7 @@ class VideoSplitter:
                     temp_audiofile=f'temp-audio-{segment_num}.m4a',
                     remove_temp=True,
                     verbose=False,
+                    logger=None,  # Fix for GitHub: Disable logger
                     fps=30
                 )
                 
