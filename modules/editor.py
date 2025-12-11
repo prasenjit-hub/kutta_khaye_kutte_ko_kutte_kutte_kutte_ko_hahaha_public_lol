@@ -97,12 +97,14 @@ class VideoEditor:
             final_video.write_videofile(
                 output_path,
                 codec='libx264',
-                audio_codec='aac',
+                audio_codec='libmp3lame',
+                temp_audiofile='temp-text-audio.m4a',
+                remove_temp=True,
                 fps=30,
                 preset='ultrafast',
                 threads=1,
                 verbose=False,
-                logger=SilentLogger()  # Use custom silent logger
+                logger=SilentLogger()
             )
             
             # Cleanup
