@@ -11,17 +11,18 @@ import numpy as np
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# SilentLogger to prevent stdout errors in GitHub Actions
-class SilentLogger:
-    def __call__(self, message): pass
+# PrintingLogger to see FFmpeg output safely
+class PrintingLogger:
+    def __call__(self, message): 
+        if message: print(f"[MoviePy] {message}")
     def tqdm(self, *args, **kwargs): return args[0]
-    def write(self, message): pass
+    def write(self, message): 
+        if message.strip(): print(f"[FFmpeg] {message.strip()}")
     def flush(self): pass
     def iter_bar(self, iterator=None, **kwargs): 
         if iterator:
             for x in iterator:
                 yield x
-    def iterators(self, **kwargs): pass
 
 class VideoEditor:
     def __init__(self, config: dict):
@@ -40,6 +41,11 @@ class VideoEditor:
         try:
             logger.info(f"Adding overlays to: {video_path}")
             
+            # Verify input exists
+            if not os.path.exists(video_path):
+                logger.error(f"Input file not found: {video_path}")
+                return None
+
             # Load video
             video = VideoFileClip(video_path)
             
@@ -49,12 +55,10 @@ class VideoEditor:
             # Create Part number overlay using PIL
             part_text = self.overlay_settings.get('part_text_format', 'Part {n}').format(n=part_number)
             
-            # Create text overlay image using PIL
-            # Create transparent image for text
+            # Create text overlay using PIL
             txt_img = Image.new('RGBA', (video.w, 200), (0, 0, 0, 0))
             draw = ImageDraw.Draw(txt_img)
             
-            # Try to use a nice font, fallback to default
             try:
                 font_size = self.overlay_settings.get('part_text_size', 80)
                 font = ImageFont.truetype("arialbd.ttf", font_size)
@@ -64,35 +68,28 @@ class VideoEditor:
                 except:
                     font = ImageFont.load_default()
             
-            # Get text size for centering
             bbox = draw.textbbox((0, 0), part_text, font=font)
             text_width = bbox[2] - bbox[0]
             
             x = (video.w - text_width) // 2
             y = 50
             
-            # Draw shadow (black outline)
             shadow_offset = 3
             for offset_x in [-shadow_offset, 0, shadow_offset]:
                 for offset_y in [-shadow_offset, 0, shadow_offset]:
                     if offset_x != 0 or offset_y != 0:
                         draw.text((x + offset_x, y + offset_y), part_text, font=font, fill=(0, 0, 0, 255))
             
-            # Draw main text (white)
             draw.text((x, y), part_text, font=font, fill=(255, 255, 255, 255))
             
-            # Save text overlay as temporary image
             txt_overlay_path = 'temp_text_overlay.png'
             txt_img.save(txt_overlay_path)
             
-            # Create ImageClip from the text overlay
             from moviepy.editor import ImageClip
             text_clip = ImageClip(txt_overlay_path).set_duration(video.duration).set_position(('center', 0))
             
-            # Composite video with text overlay
             final_video = CompositeVideoClip([video, text_clip])
             
-            # Write output
             logger.info(f"Writing edited video to: {output_path}")
             final_video.write_videofile(
                 output_path,
@@ -103,15 +100,13 @@ class VideoEditor:
                 fps=30,
                 preset='ultrafast',
                 threads=1,
-                verbose=True,  # Debug ON
-                logger=SilentLogger()
+                verbose=True,
+                logger=PrintingLogger()
             )
             
-            # Cleanup
             video.close()
             final_video.close()
             
-            # Remove temporary overlay image
             if os.path.exists(txt_overlay_path):
                 os.remove(txt_overlay_path)
             

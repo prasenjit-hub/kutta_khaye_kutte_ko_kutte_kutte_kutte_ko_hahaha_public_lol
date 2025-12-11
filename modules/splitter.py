@@ -10,17 +10,18 @@ from typing import List
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# SilentLogger to prevent stdout errors in GitHub Actions
-class SilentLogger:
-    def __call__(self, message): pass
+# PrintingLogger to see FFmpeg output safely
+class PrintingLogger:
+    def __call__(self, message): 
+        if message: print(f"[MoviePy] {message}")
     def tqdm(self, *args, **kwargs): return args[0]
-    def write(self, message): pass
+    def write(self, message): 
+        if message.strip(): print(f"[FFmpeg] {message.strip()}")
     def flush(self): pass
     def iter_bar(self, iterator=None, **kwargs): 
         if iterator:
             for x in iterator:
                 yield x
-    def iterators(self, **kwargs): pass
 
 class VideoSplitter:
     def __init__(self, output_dir: str = "processed"):
@@ -66,14 +67,20 @@ class VideoSplitter:
                     audio_codec='aac',
                     temp_audiofile=f'temp-audio-{segment_num}.m4a',
                     remove_temp=True,
-                    verbose=True,  # Enable verbose to see FFmpeg error
-                    logger=SilentLogger(),
+                    verbose=True,
+                    logger=PrintingLogger(),  # Use printing logger
                     fps=30,
                     threads=1,
                     preset='ultrafast'
                 )
                 
                 segment_paths.append(segment_path)
+                segment_path_abs = os.path.abspath(segment_path)
+                if os.path.exists(segment_path_abs) and os.path.getsize(segment_path_abs) > 0:
+                     logger.info(f"Verified segment exists: {segment_path}")
+                else:
+                     logger.error(f"Segment file creation failed or empty: {segment_path}")
+
                 segment.close()
                 
                 start_time = end_time
@@ -86,7 +93,6 @@ class VideoSplitter:
             
         except Exception as e:
             logger.error(f"Error splitting video: {e}")
-            # Clean up partial files if needed
             return []
     
     def get_segment_info(self, video_path: str, segment_duration: int = 60) -> dict:
