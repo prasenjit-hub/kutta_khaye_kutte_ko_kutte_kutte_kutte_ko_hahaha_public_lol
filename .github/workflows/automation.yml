@@ -37,6 +37,9 @@ jobs:
       run: |
         echo "${{ secrets.YOUTUBE_CREDENTIALS }}" | base64 -d > youtube_credentials.json
         echo "${{ secrets.YOUTUBE_TOKEN }}" | base64 -d > youtube_token.pickle
+        if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
+          echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > youtube_cookies.txt
+        fi
     
     - name: 🚀 Run Automation
       run: |

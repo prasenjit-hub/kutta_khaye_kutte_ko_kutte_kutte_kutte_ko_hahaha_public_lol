@@ -55,6 +55,11 @@ class VideoDownloader:
         
         try:
             logger.info(f"Downloading video: {video_url}")
+            # Check for cookies file
+            if os.path.exists('youtube_cookies.txt'):
+                logger.info("🍪 Using YouTube cookies for authentication")
+                ydl_opts['cookiefile'] = 'youtube_cookies.txt'
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
                 
