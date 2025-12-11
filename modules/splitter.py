@@ -64,11 +64,12 @@ class VideoSplitter:
                 segment.write_videofile(
                     segment_path,
                     codec='libx264',
-                    audio_codec='aac',
-                    temp_audiofile=f'temp-audio-{segment_num}.m4a',
-                    remove_temp=True,
+                    audio=False,  # DIAGNOSTIC: Disable audio to test video writing
+                    # audio_codec='aac',
+                    # temp_audiofile=f'temp-audio-{segment_num}.m4a',
+                    # remove_temp=True,
                     verbose=True,
-                    logger=PrintingLogger(),  # Use printing logger
+                    logger=PrintingLogger(),
                     fps=30,
                     threads=1,
                     preset='ultrafast'
