@@ -1,28 +1,46 @@
 """
 Video Editor
-Adds text overlays (part numbers, titles) and converts to Instagram Reel format
+Adds text overlays (part numbers) and converts to YouTube Shorts format (9:16)
+Uses FFmpeg for reliable video processing
 """
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
-from PIL import Image, ImageDraw, ImageFont
+import subprocess
 import os
 import logging
-import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# PrintingLogger to see FFmpeg output safely
-class PrintingLogger:
-    def __call__(self, message): 
-        if message: print(f"[MoviePy] {message}")
-    def tqdm(self, *args, **kwargs): return args[0]
-    def write(self, message): 
-        if message.strip(): print(f"[FFmpeg] {message.strip()}")
-    def flush(self): pass
-    def iter_bar(self, iterator=None, **kwargs): 
-        if iterator:
-            for x in iterator:
-                yield x
+
+def get_video_info(video_path: str) -> dict:
+    """Get video dimensions and duration using ffprobe"""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height,duration',
+            '-show_entries', 'format=duration',
+            '-of', 'csv=p=0:s=x',
+            video_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        output = result.stdout.strip()
+        
+        # Parse output (format: width x height x stream_duration \n format_duration)
+        lines = output.split('\n')
+        parts = lines[0].split('x')
+        
+        width = int(parts[0]) if parts[0] else 1920
+        height = int(parts[1]) if len(parts) > 1 and parts[1] else 1080
+        
+        # Get duration from format
+        duration = float(lines[-1]) if len(lines) > 1 else 60
+        
+        return {'width': width, 'height': height, 'duration': duration}
+    except Exception as e:
+        logger.error(f"Error getting video info: {e}")
+        return {'width': 1920, 'height': 1080, 'duration': 60}
+
 
 class VideoEditor:
     def __init__(self, config: dict):
@@ -30,9 +48,63 @@ class VideoEditor:
         self.overlay_settings = config.get('overlay_settings', {})
         self.video_settings = config.get('video_settings', {})
     
+    def _create_text_overlay(self, text: str, width: int, height: int = 200) -> str:
+        """Create a text overlay image using PIL"""
+        # Create transparent image
+        img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        # Load font
+        font_size = self.overlay_settings.get('part_text_size', 80)
+        font = None
+        
+        font_paths = [
+            "arialbd.ttf",
+            "arial.ttf",
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        ]
+        
+        for font_path in font_paths:
+            try:
+                font = ImageFont.truetype(font_path, font_size)
+                break
+            except:
+                continue
+        
+        if font is None:
+            font = ImageFont.load_default()
+        
+        # Get text dimensions
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        
+        # Center text
+        x = (width - text_width) // 2
+        y = 50
+        
+        # Draw shadow
+        shadow_offset = 3
+        for ox in [-shadow_offset, 0, shadow_offset]:
+            for oy in [-shadow_offset, 0, shadow_offset]:
+                if ox != 0 or oy != 0:
+                    draw.text((x + ox, y + oy), text, font=font, fill=(0, 0, 0, 255))
+        
+        # Draw main text
+        draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+        
+        # Save to temp file
+        overlay_path = 'temp_overlay.png'
+        img.save(overlay_path)
+        
+        return overlay_path
+    
     def add_overlays(self, video_path: str, part_number: int, title: str, output_path: str = None) -> str:
         """
-        Add text overlays to video and convert to YouTube Shorts format
+        Add text overlays to video and convert to YouTube Shorts format (9:16)
+        Uses FFmpeg for reliable processing.
         """
         if output_path is None:
             base, ext = os.path.splitext(video_path)
@@ -45,119 +117,128 @@ class VideoEditor:
             if not os.path.exists(video_path):
                 logger.error(f"Input file not found: {video_path}")
                 return None
-
-            # Load video
-            video = VideoFileClip(video_path)
             
-            # Convert to YouTube Shorts aspect ratio (9:16)
-            video = self._convert_to_reels_format(video)
+            # Get video info
+            video_info = get_video_info(video_path)
+            input_width = video_info['width']
+            input_height = video_info['height']
             
-            # Create Part number overlay using PIL
+            logger.info(f"Input video: {input_width}x{input_height}")
+            
+            # Target resolution (9:16 for YouTube Shorts)
+            target_width, target_height = self.video_settings.get('target_resolution', [1080, 1920])
+            
+            # Create text overlay
             part_text = self.overlay_settings.get('part_text_format', 'Part {n}').format(n=part_number)
+            overlay_path = self._create_text_overlay(part_text, target_width)
             
-            # Create text overlay using PIL
-            txt_img = Image.new('RGBA', (video.w, 200), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(txt_img)
-            
-            try:
-                font_size = self.overlay_settings.get('part_text_size', 80)
-                font = ImageFont.truetype("arialbd.ttf", font_size)
-            except:
-                try:
-                    font = ImageFont.truetype("arial.ttf", font_size)
-                except:
-                    font = ImageFont.load_default()
-            
-            bbox = draw.textbbox((0, 0), part_text, font=font)
-            text_width = bbox[2] - bbox[0]
-            
-            x = (video.w - text_width) // 2
-            y = 50
-            
-            shadow_offset = 3
-            for offset_x in [-shadow_offset, 0, shadow_offset]:
-                for offset_y in [-shadow_offset, 0, shadow_offset]:
-                    if offset_x != 0 or offset_y != 0:
-                        draw.text((x + offset_x, y + offset_y), part_text, font=font, fill=(0, 0, 0, 255))
-            
-            draw.text((x, y), part_text, font=font, fill=(255, 255, 255, 255))
-            
-            txt_overlay_path = 'temp_text_overlay.png'
-            txt_img.save(txt_overlay_path)
-            
-            from moviepy.editor import ImageClip
-            text_clip = ImageClip(txt_overlay_path).set_duration(video.duration).set_position(('center', 0))
-            
-            final_video = CompositeVideoClip([video, text_clip])
-            
-            logger.info(f"Writing edited video to: {output_path}")
-            final_video.write_videofile(
-                output_path,
-                codec='libx264',
-                audio_codec='aac',
-                temp_audiofile='temp-text-audio.m4a',
-                remove_temp=True,
-                fps=30,
-                preset='ultrafast',
-                threads=1,
-                verbose=True,
-                logger=PrintingLogger()
+            # Build FFmpeg filter for 9:16 conversion + overlay
+            # Scale video to fit width, add padding if needed
+            filter_complex = self._build_filter_complex(
+                input_width, input_height,
+                target_width, target_height
             )
             
-            video.close()
-            final_video.close()
+            # FFmpeg command
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,  # Input video
+                '-i', overlay_path,  # Overlay image
+                '-filter_complex', filter_complex,
+                '-map', '[outv]',
+                '-map', '0:a?',  # Keep audio if exists
+                '-c:v', 'libx264',
+                '-preset', 'ultrafast',
+                '-crf', '23',
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-r', '30',  # 30 fps
+                '-movflags', '+faststart',
+                '-loglevel', 'error',
+                output_path
+            ]
             
-            if os.path.exists(txt_overlay_path):
-                os.remove(txt_overlay_path)
+            logger.info(f"Writing edited video to: {output_path}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
-            logger.info(f"✓ Overlay added successfully")
-            return output_path
+            # Cleanup temp overlay
+            if os.path.exists(overlay_path):
+                os.remove(overlay_path)
             
+            if result.returncode != 0:
+                logger.error(f"FFmpeg error: {result.stderr}")
+                return None
+            
+            # Verify output
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                logger.info(f"✓ Overlay added successfully")
+                return output_path
+            else:
+                logger.error("Output file missing or too small")
+                return None
+                
         except Exception as e:
             logger.error(f"Error adding overlays: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
-    def _convert_to_reels_format(self, video: VideoFileClip) -> VideoFileClip:
-        target_width, target_height = self.video_settings.get('target_resolution', [1080, 1920])
-        target_aspect = target_width / target_height
-        current_aspect = video.w / video.h
-        
-        if abs(current_aspect - target_aspect) < 0.01:
-            return video.resize(height=target_height)
+    def _build_filter_complex(self, in_w: int, in_h: int, out_w: int, out_h: int) -> str:
+        """
+        Build FFmpeg filter complex for:
+        1. Convert to 9:16 aspect ratio (center crop or pad)
+        2. Add text overlay
+        """
+        target_aspect = out_w / out_h  # 9:16 = 0.5625
+        current_aspect = in_w / in_h
         
         if current_aspect > target_aspect:
-            video_resized = video.resize(width=target_width)
-            if video_resized.h < target_height:
-                from moviepy.editor import CompositeVideoClip
-                background = video_resized.resize(height=target_height)
-                background = background.resize(0.5)
-                background = background.resize(height=target_height)
-                background = background.fl_image(lambda image: (image * 0.3).astype('uint8'))
-                y_offset = (target_height - video_resized.h) // 2
-                final = CompositeVideoClip([
-                    background.set_position(('center', 'center')),
-                    video_resized.set_position(('center', y_offset))
-                ], size=(target_width, target_height))
-                return final
-            else:
-                y_center = video_resized.h / 2
-                y1 = int(y_center - target_height / 2)
-                return video_resized.crop(y1=y1, height=target_height)
+            # Video is wider - scale to height, crop width (center)
+            scale_filter = f"scale=-2:{out_h}"
+            crop_filter = f"crop={out_w}:{out_h}"
+            video_prep = f"[0:v]{scale_filter},{crop_filter}[scaled]"
         else:
-            video = video.resize(width=target_width)
-            if video.h > target_height:
-                y_center = video.h / 2
-                y1 = int(y_center - target_height / 2)
-                video = video.crop(y1=y1, height=target_height)
-            return video
+            # Video is taller or equal - scale to width, may need padding
+            scale_filter = f"scale={out_w}:-2"
+            # Pad to fill height if needed
+            pad_filter = f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:black"
+            video_prep = f"[0:v]{scale_filter},{pad_filter}[scaled]"
+        
+        # Overlay the text image at top
+        overlay_filter = "[scaled][1:v]overlay=(W-w)/2:0[outv]"
+        
+        return f"{video_prep};{overlay_filter}"
     
     def _truncate_title(self, title: str, max_length: int = 40) -> str:
         if len(title) <= max_length:
             return title
         return title[:max_length-3] + '...'
 
+
 if __name__ == "__main__":
     import json
+    
+    # Load config
     with open('config.json', 'r') as f:
         config = json.load(f)
+    
     editor = VideoEditor(config)
+    
+    # Test with a video if exists
+    test_dir = "test_output"
+    if os.path.exists(test_dir):
+        for f in os.listdir(test_dir):
+            if f.endswith('.mp4') and not f.endswith('_edited.mp4'):
+                input_path = os.path.join(test_dir, f)
+                output_path = os.path.join(test_dir, f.replace('.mp4', '_edited.mp4'))
+                
+                print(f"Testing editor with: {input_path}")
+                result = editor.add_overlays(input_path, 1, "Test Title", output_path)
+                
+                if result:
+                    print(f"✓ Success: {result}")
+                else:
+                    print("✗ Failed")
+                break
+    else:
+        print("No test_output directory found. Run splitter first.")

@@ -1,27 +1,31 @@
 """
 Video Splitter
-Splits videos into 1-minute segments
+Splits videos into 1-minute segments using FFmpeg subprocess for reliability
 """
-from moviepy.editor import VideoFileClip
 import os
+import subprocess
 import logging
 from typing import List
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# PrintingLogger to see FFmpeg output safely
-class PrintingLogger:
-    def __call__(self, message): 
-        if message: print(f"[MoviePy] {message}")
-    def tqdm(self, *args, **kwargs): return args[0]
-    def write(self, message): 
-        if message.strip(): print(f"[FFmpeg] {message.strip()}")
-    def flush(self): pass
-    def iter_bar(self, iterator=None, **kwargs): 
-        if iterator:
-            for x in iterator:
-                yield x
+
+def get_video_duration(video_path: str) -> float:
+    """Get video duration using ffprobe"""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            video_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return float(result.stdout.strip())
+    except Exception as e:
+        logger.error(f"Error getting duration: {e}")
+        return 0
+
 
 class VideoSplitter:
     def __init__(self, output_dir: str = "processed"):
@@ -30,14 +34,18 @@ class VideoSplitter:
     
     def split_video(self, video_path: str, video_id: str, segment_duration: int = 60) -> List[str]:
         """
-        Split video into segments of specified duration
+        Split video into segments of specified duration using FFmpeg directly.
+        This is more reliable than moviepy's write_videofile.
         """
         segment_paths = []
         
         try:
             logger.info(f"Loading video: {video_path}")
-            video = VideoFileClip(video_path)
-            total_duration = video.duration
+            total_duration = get_video_duration(video_path)
+            
+            if total_duration <= 0:
+                logger.error("Could not determine video duration")
+                return []
             
             logger.info(f"Video duration: {total_duration:.2f}s")
             logger.info(f"Creating {segment_duration}s segments...")
@@ -47,60 +55,73 @@ class VideoSplitter:
             
             while start_time < total_duration:
                 end_time = min(start_time + segment_duration, total_duration)
+                duration = end_time - start_time
                 
-                # Check for minimum duration (skip if < 10s)
-                if (end_time - start_time) < 10:
+                # Skip if segment is too short (< 10s)
+                if duration < 10:
+                    logger.info(f"Skipping final segment (too short: {duration:.2f}s)")
                     break
-
-                # Create segment
-                segment = video.subclip(start_time, end_time)
                 
-                # Output path (Switching to MKV for stability)
-                segment_filename = f"{video_id}_part{segment_num}.mkv"
+                # Output path
+                segment_filename = f"{video_id}_part{segment_num}.mp4"
                 segment_path = os.path.join(self.output_dir, segment_filename)
                 
-                # Write segment
+                # Build FFmpeg command
                 logger.info(f"Writing segment {segment_num}: {start_time:.2f}s - {end_time:.2f}s")
-                segment.write_videofile(
-                    segment_path,
-                    codec='libx264',
-                    # audio_codec='aac', # Let automatic selection work for MKV
-                    temp_audiofile=f'temp-audio-{segment_num}.m4a',
-                    remove_temp=True,
-                    verbose=True,
-                    logger=PrintingLogger(),
-                    fps=30,
-                    threads=1,
-                    preset='veryfast' # Slightly safer than ultrafast
-                )
                 
-                segment_paths.append(segment_path)
-                segment_path_abs = os.path.abspath(segment_path)
-                if os.path.exists(segment_path_abs) and os.path.getsize(segment_path_abs) > 0:
-                     logger.info(f"Verified segment exists: {segment_path}")
+                cmd = [
+                    'ffmpeg', '-y',  # Overwrite output
+                    '-ss', str(start_time),  # Start time (before -i for fast seek)
+                    '-i', video_path,  # Input file
+                    '-t', str(duration),  # Duration
+                    '-c:v', 'libx264',  # Video codec
+                    '-preset', 'ultrafast',  # Fast encoding
+                    '-c:a', 'aac',  # Audio codec
+                    '-b:a', '128k',  # Audio bitrate
+                    '-movflags', '+faststart',  # Web optimization
+                    '-loglevel', 'error',  # Only show errors
+                    segment_path
+                ]
+                
+                # Run FFmpeg
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    logger.error(f"FFmpeg error for segment {segment_num}: {result.stderr}")
+                    continue
+                
+                # Verify output
+                if os.path.exists(segment_path) and os.path.getsize(segment_path) > 1000:
+                    segment_paths.append(segment_path)
+                    logger.info(f"✓ Segment {segment_num} created successfully")
                 else:
-                     logger.error(f"Segment file creation failed or empty: {segment_path}")
-
-                segment.close()
+                    logger.error(f"Segment creation failed (file missing or too small): {segment_path}")
                 
                 start_time = end_time
                 segment_num += 1
             
-            video.close()
             logger.info(f"Created {len(segment_paths)} segments")
-            
             return segment_paths
             
         except Exception as e:
             logger.error(f"Error splitting video: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def get_segment_info(self, video_path: str, segment_duration: int = 60) -> dict:
+        """Get information about how the video would be split"""
         try:
-            video = VideoFileClip(video_path)
-            total_duration = video.duration
-            num_segments = int(total_duration / segment_duration) + (1 if total_duration % segment_duration > 0 else 0)
-            video.close()
+            total_duration = get_video_duration(video_path)
+            
+            if total_duration <= 0:
+                return {}
+            
+            num_segments = int(total_duration / segment_duration)
+            # Add one more if there's a remainder >= 10 seconds
+            remainder = total_duration % segment_duration
+            if remainder >= 10:
+                num_segments += 1
             
             return {
                 'total_duration': total_duration,
@@ -111,5 +132,19 @@ class VideoSplitter:
             logger.error(f"Error getting video info: {e}")
             return {}
 
+
 if __name__ == "__main__":
-    splitter = VideoSplitter()
+    # Quick test
+    splitter = VideoSplitter(output_dir="test_output")
+    
+    # Test with a video if exists
+    test_video = "downloads/8bMh8azh3CY.mp4"
+    if os.path.exists(test_video):
+        info = splitter.get_segment_info(test_video)
+        print(f"Video info: {info}")
+        
+        # Split first 60 seconds only for testing
+        segments = splitter.split_video(test_video, "test_split", segment_duration=60)
+        print(f"Created segments: {segments}")
+    else:
+        print("No test video found")
