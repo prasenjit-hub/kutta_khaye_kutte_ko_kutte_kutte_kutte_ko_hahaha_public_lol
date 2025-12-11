@@ -172,7 +172,7 @@ class YouTubeShortsAutomation:
             video_path = self.downloader.download_video(
                 video_data['url'],
                 video_id,
-                prefer_hindi=True
+                prefer_hindi=False  # English audio
             )
             if not video_path:
                 logger.error("Download failed!")
