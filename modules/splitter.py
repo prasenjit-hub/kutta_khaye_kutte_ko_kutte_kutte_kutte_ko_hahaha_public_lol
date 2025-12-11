@@ -64,11 +64,12 @@ class VideoSplitter:
                     segment_path,
                     codec='libx264',
                     audio_codec='aac',
-                    temp_audiofile=f'temp-audio-{segment_num}.m4a',
                     remove_temp=True,
                     verbose=False,
-                    logger=SilentLogger(),  # Use custom silent logger
-                    fps=30
+                    logger=SilentLogger(),
+                    fps=30,
+                    threads=1,  # Use single thread for safety
+                    preset='ultrafast'
                 )
                 
                 segment_paths.append(segment_path)

@@ -99,7 +99,8 @@ class VideoEditor:
                 codec='libx264',
                 audio_codec='aac',
                 fps=30,
-                preset='medium',
+                preset='ultrafast',
+                threads=1,
                 verbose=False,
                 logger=SilentLogger()  # Use custom silent logger
             )
