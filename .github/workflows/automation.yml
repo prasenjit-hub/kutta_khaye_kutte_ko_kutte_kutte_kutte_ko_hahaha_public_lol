@@ -3,7 +3,7 @@ name: YouTube Shorts Automation
 on:
   # Schedule: Every 6 hours
   schedule:
-    - cron: '0 */6 * * *'  # At minute 0 past every 6th hour
+    - cron: '0 */12 * * *'  # Run every 12 hours (e.g. 00:00 and 12:00)
   
   # Manual trigger (for testing)
   workflow_dispatch:

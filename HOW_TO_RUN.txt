@@ -1,0 +1,27 @@
+================================================================================
+🚀 HOW TO RUN ON MAIN MACHINE
+================================================================================
+
+1. COPY FOLDER
+   Copy the entire "instagram auto video upload" folder to your main computer.
+
+2. INSTALL REQUIREMENTS
+   Open terminal inside the folder and run:
+   pip install -r requirements.txt
+
+3. SETUP YOUTUBE API
+   - Follow instructions in "YOUTUBE_SETUP.md"
+   - Create your Google Cloud project
+   - Download "youtube_credentials.json"
+   - Place it in this folder
+
+4. START AUTOMATION
+   Run the following command:
+   python main.py --full
+
+--------------------------------------------------------------------------------
+💡 TIPS:
+   - "convert_logo.py" is only for the VM (you can delete it on main machine)
+   - Check "config.json" if you want to change tags or zoomed level
+   - Logs are saved in "logs/automation.log"
+================================================================================
