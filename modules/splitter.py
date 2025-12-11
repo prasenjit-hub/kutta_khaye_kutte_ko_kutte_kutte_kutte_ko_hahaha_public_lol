@@ -10,6 +10,12 @@ from typing import List
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# SilentLogger to prevent stdout errors in GitHub Actions
+class SilentLogger:
+    def __call__(self, message): pass
+    def tqdm(self, *args, **kwargs): return args[0]
+    def write(self, message): pass
+    def flush(self): pass
 
 class VideoSplitter:
     def __init__(self, output_dir: str = "processed"):
@@ -19,14 +25,6 @@ class VideoSplitter:
     def split_video(self, video_path: str, video_id: str, segment_duration: int = 60) -> List[str]:
         """
         Split video into segments of specified duration
-        
-        Args:
-            video_path: Path to input video
-            video_id: Video ID for naming segments
-            segment_duration: Duration of each segment in seconds (default 60)
-        
-        Returns:
-            List of paths to segment files
         """
         segment_paths = []
         
@@ -44,6 +42,10 @@ class VideoSplitter:
             while start_time < total_duration:
                 end_time = min(start_time + segment_duration, total_duration)
                 
+                # Check for minimum duration (skip if < 10s)
+                if (end_time - start_time) < 10:
+                    break
+
                 # Create segment
                 segment = video.subclip(start_time, end_time)
                 
@@ -60,7 +62,7 @@ class VideoSplitter:
                     temp_audiofile=f'temp-audio-{segment_num}.m4a',
                     remove_temp=True,
                     verbose=False,
-                    logger=None,  # Fix for GitHub: Disable logger
+                    logger=SilentLogger(),  # Use custom silent logger
                     fps=30
                 )
                 
@@ -77,12 +79,10 @@ class VideoSplitter:
             
         except Exception as e:
             logger.error(f"Error splitting video: {e}")
+            # Clean up partial files if needed
             return []
     
     def get_segment_info(self, video_path: str, segment_duration: int = 60) -> dict:
-        """
-        Get information about how many segments will be created
-        """
         try:
             video = VideoFileClip(video_path)
             total_duration = video.duration
@@ -98,17 +98,6 @@ class VideoSplitter:
             logger.error(f"Error getting video info: {e}")
             return {}
 
-
 if __name__ == "__main__":
-    # Test splitter
+    # Test
     splitter = VideoSplitter()
-    
-    # Test with downloaded video
-    test_video = "downloads/test_video.mp4"
-    if os.path.exists(test_video):
-        segments = splitter.split_video(test_video, "test", segment_duration=60)
-        print(f"\n✓ Created {len(segments)} segments:")
-        for seg in segments:
-            print(f"  - {seg}")
-    else:
-        print(f"\n✗ Test video not found: {test_video}")
