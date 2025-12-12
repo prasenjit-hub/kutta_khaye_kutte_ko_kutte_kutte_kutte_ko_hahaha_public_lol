@@ -1,9 +1,10 @@
 name: YouTube Shorts Automation
 
 on:
-  # Schedule: Every 12 hours (2x daily)
+  # Schedule: 4 PM IST (10:30 UTC) and 10 PM IST (16:30 UTC)
   schedule:
-    - cron: '0 */12 * * *'  
+    - cron: '30 10 * * *'   # 4 PM IST
+    - cron: '30 16 * * *'   # 10 PM IST  
   
   # Manual trigger
   workflow_dispatch:
