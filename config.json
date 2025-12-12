@@ -1,5 +1,7 @@
 {
   "youtube_channel": "https://www.youtube.com/@MrBeast",
+  "language": "hindi",
+  "min_video_date": "2019-03-15",
   "youtube_upload": {
     "credentials_file": "youtube_credentials.json",
     "title_template": "{title} - Part {part} #shorts #viral #mrbeast",

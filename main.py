@@ -172,11 +172,14 @@ class YouTubeShortsAutomation:
             video_path = self.downloader.download_video(
                 video_data['url'],
                 video_id,
-                prefer_hindi=False  # English audio
+                prefer_hindi=True  # Hindi audio ONLY - no fallback
             )
             if not video_path:
-                logger.error("Download failed!")
-                return
+                logger.warning("⚠️ Hindi audio not available for this video. Marking as skipped...")
+                self.tracking['videos'][video_id]['status'] = 'skipped_no_hindi'
+                self._save_tracking()
+                # Try next video
+                return self.run_full_automation()
         else:
             logger.info(f"✓ Video already downloaded: {video_path}")
         

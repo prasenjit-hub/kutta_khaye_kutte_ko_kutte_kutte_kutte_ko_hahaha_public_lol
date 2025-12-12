@@ -1,25 +1,76 @@
 """
-YouTube Channel Scraper
+YouTube Channel Scraper - HINDI VERSION
 Scrapes all videos from a YouTube channel without using API
+Filters videos to only include those after March 15, 2019 (Hindi audio available)
 """
 import requests
 from bs4 import BeautifulSoup
 import json
 import re
 from typing import List, Dict
+from datetime import datetime, timedelta
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Minimum date for Hindi audio availability on MrBeast channel
+MIN_VIDEO_DATE = datetime(2019, 3, 15)
 
-def get_channel_videos(channel_url: str, sort_by: str = 'date') -> List[Dict]:
+
+def parse_relative_date(relative_str: str) -> datetime:
+    """
+    Parse relative date strings like "2 days ago", "1 month ago", "1 year ago"
+    Returns approximate datetime
+    """
+    now = datetime.now()
+    relative_str = relative_str.lower().strip()
+    
+    # Extract number and unit
+    match = re.search(r'(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago', relative_str)
+    
+    if not match:
+        # If can't parse, assume it's recent (within date range)
+        return now
+    
+    number = int(match.group(1))
+    unit = match.group(2)
+    
+    # Calculate the date
+    if unit == 'second':
+        return now - timedelta(seconds=number)
+    elif unit == 'minute':
+        return now - timedelta(minutes=number)
+    elif unit == 'hour':
+        return now - timedelta(hours=number)
+    elif unit == 'day':
+        return now - timedelta(days=number)
+    elif unit == 'week':
+        return now - timedelta(weeks=number)
+    elif unit == 'month':
+        return now - timedelta(days=number * 30)  # Approximate
+    elif unit == 'year':
+        return now - timedelta(days=number * 365)  # Approximate
+    
+    return now
+
+
+def is_video_after_min_date(published_str: str, min_date: datetime = MIN_VIDEO_DATE) -> bool:
+    """
+    Check if video was published after the minimum date
+    """
+    video_date = parse_relative_date(published_str)
+    return video_date >= min_date
+
+
+def get_channel_videos(channel_url: str, sort_by: str = 'date', filter_by_date: bool = True) -> List[Dict]:
     """
     Scrape all videos from a YouTube channel and sort
     
     Args:
         channel_url: YouTube channel URL (e.g., https://www.youtube.com/@ChannelName)
         sort_by: 'date' for newest first, 'views' for highest views first
+        filter_by_date: If True, only include videos after March 15, 2019
     
     Returns:
         List of video dictionaries with id, title, views, duration, upload_date
@@ -41,7 +92,15 @@ def get_channel_videos(channel_url: str, sort_by: str = 'date') -> List[Dict]:
         # Extract initial data from page
         videos = extract_videos_from_page(response.text)
         
-        logger.info(f"Found {len(videos)} videos")
+        logger.info(f"Found {len(videos)} total videos")
+        
+        # Filter videos by date (only after March 15, 2019 for Hindi audio)
+        if filter_by_date:
+            original_count = len(videos)
+            videos = [v for v in videos if is_video_after_min_date(v.get('published', 'Unknown'))]
+            filtered_count = original_count - len(videos)
+            logger.info(f"🇮🇳 Filtered out {filtered_count} videos (before March 2019, no Hindi audio)")
+            logger.info(f"✓ {len(videos)} videos with Hindi audio available")
         
         # Sort by date (newest first) or views (highest first)
         if sort_by == 'date':
@@ -141,10 +200,14 @@ def parse_view_count(view_text: str) -> int:
 if __name__ == "__main__":
     # Test the scraper
     test_url = "https://www.youtube.com/@MrBeast"
-    videos = get_channel_videos(test_url)
+    videos = get_channel_videos(test_url, filter_by_date=True)
     
-    print(f"\nTop 5 videos by views:")
+    print(f"\n🇮🇳 Videos with Hindi audio (after March 2019):")
+    print(f"Total: {len(videos)} videos\n")
+    
+    print("Top 5 videos:")
     for i, video in enumerate(videos[:5], 1):
         print(f"{i}. {video['title']}")
         print(f"   Views: {video['views']:,} | Duration: {video['duration']}")
+        print(f"   Published: {video['published']}")
         print(f"   URL: {video['url']}\n")
