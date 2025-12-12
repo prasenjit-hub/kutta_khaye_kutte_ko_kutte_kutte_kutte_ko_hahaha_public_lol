@@ -9,6 +9,7 @@ logs/*.log
 instagram_session.json
 youtube_credentials.json
 youtube_token.pickle
+youtube_cookies.txt
 __pycache__/
 *.pyc
 *.pyo
