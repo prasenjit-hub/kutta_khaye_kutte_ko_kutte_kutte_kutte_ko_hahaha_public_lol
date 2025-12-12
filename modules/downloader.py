@@ -17,43 +17,73 @@ class VideoDownloader:
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
     
-    def check_hindi_audio_available(self, video_url: str) -> bool:
-        """
-        Check if Hindi audio track is available for the video
-        Returns True if Hindi audio exists, False otherwise
-        """
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
+    def get_ydl_opts(self):
+        """Get base yt-dlp options with cookies if available"""
+        opts = {
+            'quiet': False,
+            'no_warnings': False,
         }
         
-        # Add cookies if available
         if os.path.exists('youtube_cookies.txt'):
-            ydl_opts['cookiefile'] = 'youtube_cookies.txt'
+            logger.info("🍪 Using YouTube cookies for authentication")
+            opts['cookiefile'] = 'youtube_cookies.txt'
+        else:
+            logger.info("ℹ️ No cookies file found, attempting without authentication")
+        
+        return opts
+    
+    def find_hindi_audio_format(self, video_url: str) -> Optional[str]:
+        """
+        Check available formats and find Hindi audio format ID
+        Returns format ID string or None if not available
+        """
+        ydl_opts = self.get_ydl_opts()
+        ydl_opts['quiet'] = True
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=False)
                 
-                # Check for Hindi audio in formats
                 formats = info.get('formats', [])
+                
+                # Find Hindi audio formats
+                hindi_audio_ids = []
+                best_video_id = None
+                best_video_height = 0
+                
                 for fmt in formats:
-                    lang = fmt.get('language', '')
-                    if lang == 'hi':
-                        return True
+                    format_id = fmt.get('format_id', '')
+                    language = fmt.get('language', '')
+                    height = fmt.get('height', 0) or 0
+                    vcodec = fmt.get('vcodec', 'none')
+                    acodec = fmt.get('acodec', 'none')
+                    
+                    # Find Hindi audio
+                    if language == 'hi' and acodec != 'none':
+                        hindi_audio_ids.append(format_id)
+                        logger.info(f"  Found Hindi audio: {format_id}")
+                    
+                    # Find best video (up to 1080p)
+                    if vcodec != 'none' and height <= 1080 and height > best_video_height:
+                        best_video_id = format_id
+                        best_video_height = height
                 
-                # Also check requested_formats
-                requested = info.get('requested_formats', [])
-                for fmt in requested:
-                    lang = fmt.get('language', '')
-                    if lang == 'hi':
-                        return True
-                
-                return False
-                
+                if hindi_audio_ids and best_video_id:
+                    # Return format: best_video + best_hindi_audio
+                    format_str = f"{best_video_id}+{hindi_audio_ids[0]}"
+                    logger.info(f"✅ Hindi audio available! Format: {format_str}")
+                    return format_str
+                elif hindi_audio_ids:
+                    # Only audio, no suitable video found
+                    logger.info(f"Found Hindi audio but no suitable video format")
+                    return None
+                else:
+                    logger.warning("❌ No Hindi audio track found for this video")
+                    return None
+                    
         except Exception as e:
-            logger.error(f"Error checking Hindi audio: {e}")
-            return False
+            logger.error(f"Error checking formats: {e}")
+            return None
     
     def download_video(self, video_url: str, video_id: str, prefer_hindi: bool = True) -> Optional[str]:
         """
@@ -74,52 +104,31 @@ class VideoDownloader:
             logger.info(f"Video already downloaded: {output_path}")
             return output_path
         
-        # HINDI ONLY - No fallback to English!
-        # First check if Hindi audio is available
         logger.info(f"🔍 Checking for Hindi audio availability...")
         
-        # Format string for HINDI ONLY - will FAIL if Hindi not available
-        # This is intentional - we don't want English fallback
-        format_str = 'bestvideo[height<=1080][ext=mp4]+bestaudio[language=hi][ext=m4a]/bestvideo[height<=1080]+bestaudio[language=hi]'
+        # First, find Hindi audio format
+        format_str = self.find_hindi_audio_format(video_url)
         
-        ydl_opts = {
+        if not format_str:
+            logger.warning(f"⚠️ Hindi audio NOT AVAILABLE for this video. Skipping...")
+            return None
+        
+        # Download with the specific format
+        ydl_opts = self.get_ydl_opts()
+        ydl_opts.update({
             'format': format_str,
             'outtmpl': output_path,
             'merge_output_format': 'mp4',
-            'quiet': False,
-            'no_warnings': False,
             'logger': logger,
             'progress_hooks': [self._progress_hook],
-            'postprocessor_args': ['-c:a', 'aac'],
-        }
+        })
         
         try:
-            logger.info(f"📥 Downloading video with HINDI audio only: {video_url}")
-            
-            # Check for cookies file (optional for public videos)
-            if os.path.exists('youtube_cookies.txt'):
-                logger.info("🍪 Using YouTube cookies for authentication")
-                ydl_opts['cookiefile'] = 'youtube_cookies.txt'
-            else:
-                logger.info("ℹ️ No cookies file found, attempting without authentication")
+            logger.info(f"📥 Downloading video with HINDI audio: {video_url}")
+            logger.info(f"   Format: {format_str}")
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=True)
-                
-                # Verify Hindi audio was actually downloaded
-                if 'requested_formats' in info:
-                    audio_format = info.get('requested_formats', [{}])[-1]
-                    audio_lang = audio_format.get('language', 'unknown')
-                    
-                    if audio_lang == 'hi':
-                        logger.info("✅ Successfully downloaded with HINDI audio!")
-                    else:
-                        # This shouldn't happen with our format string, but just in case
-                        logger.error(f"❌ Expected Hindi audio but got: {audio_lang}")
-                        # Delete the file since it's not Hindi
-                        if os.path.exists(output_path):
-                            os.remove(output_path)
-                        return None
+                ydl.download([video_url])
             
             if os.path.exists(output_path):
                 logger.info(f"✅ Download complete (Hindi): {output_path}")
@@ -129,12 +138,7 @@ class VideoDownloader:
                 return None
                 
         except yt_dlp.utils.DownloadError as e:
-            error_msg = str(e)
-            if 'language=hi' in error_msg or 'no suitable format' in error_msg.lower():
-                logger.warning(f"⚠️ Hindi audio NOT AVAILABLE for this video. Skipping...")
-                logger.warning(f"   Video: {video_url}")
-            else:
-                logger.error(f"❌ Download error: {e}")
+            logger.error(f"❌ Download error: {e}")
             return None
             
         except Exception as e:
