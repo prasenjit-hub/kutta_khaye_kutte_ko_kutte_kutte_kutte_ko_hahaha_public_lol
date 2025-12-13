@@ -1,14 +1,15 @@
 """
-YouTube Video Downloader with Gofile Cloud Storage
-ALL AUTOMATIC ON GITHUB ACTIONS:
-- No cloud_url: Download from YouTube → Upload to Gofile → Save URL
-- cloud_url exists: Download from Gofile → Process
+YouTube Video Downloader with HuggingFace Cloud Storage
+- Downloads from YouTube with Hindi audio
+- Uploads to HuggingFace (10GB free, reliable)
+- Downloads from HuggingFace for processing
+- Deletes from HuggingFace when video complete
 """
 import subprocess
 import os
 import logging
-from typing import Optional, Dict
-from modules.cloud_storage import GofileStorage
+from typing import Optional, Tuple
+from modules.cloud_storage import HuggingFaceStorage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ class VideoDownloader:
     def __init__(self, download_dir: str = "downloads"):
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
-        self.cloud = GofileStorage()
+        self.cloud = HuggingFaceStorage()
     
     def download_from_youtube(self, video_url: str, output_path: str) -> bool:
         """
@@ -68,58 +69,65 @@ class VideoDownloader:
             logger.error(f"❌ Error: {e}")
             return False
     
-    def upload_to_cloud(self, file_path: str) -> Optional[Dict]:
-        """Upload to Gofile cloud storage"""
-        logger.info(f"☁️ Uploading to Gofile cloud storage...")
-        return self.cloud.upload_file(file_path)
+    def upload_to_cloud(self, file_path: str, video_id: str) -> Optional[str]:
+        """Upload to HuggingFace cloud storage"""
+        if not self.cloud.is_configured():
+            logger.warning("⚠️ HuggingFace not configured, skipping cloud upload")
+            return None
+        return self.cloud.upload_file(file_path, video_id)
     
-    def download_from_cloud(self, gofile_url: str, output_path: str) -> bool:
-        """Download from Gofile cloud storage"""
-        logger.info(f"☁️ Downloading from Gofile: {gofile_url}")
-        return self.cloud.download_file(gofile_url, output_path)
+    def download_from_cloud(self, cloud_url: str, output_path: str) -> bool:
+        """Download from HuggingFace cloud storage"""
+        if not self.cloud.is_configured():
+            logger.warning("⚠️ HuggingFace not configured")
+            return False
+        return self.cloud.download_file(cloud_url, output_path)
     
-    def download_video(self, video_url: str, video_id: str, cloud_url: str = None) -> tuple:
+    def delete_from_cloud(self, cloud_url: str) -> bool:
+        """Delete from HuggingFace when video is complete"""
+        if not self.cloud.is_configured():
+            return False
+        return self.cloud.delete_file(cloud_url)
+    
+    def download_video(self, video_url: str, video_id: str, cloud_url: str = None) -> Tuple[Optional[str], Optional[str]]:
         """
         Download video for processing
         Returns: (video_path, cloud_url) - cloud_url may be new if just uploaded
         
         Logic:
-        1. If cloud_url exists → Download from Gofile
-        2. If no cloud_url → Download from YouTube → Upload to Gofile → Return new URL
+        1. If cloud_url exists → Download from HuggingFace
+        2. If no cloud_url → Download from YouTube → Upload to HuggingFace → Return new URL
         """
         output_path = os.path.join(self.download_dir, f"{video_id}.mp4")
-        new_cloud_url = cloud_url  # Will be updated if we upload new
+        new_cloud_url = cloud_url
         
         # Check if already exists locally
         if os.path.exists(output_path) and os.path.getsize(output_path) > 1000000:
             logger.info(f"✓ Video already exists locally: {output_path}")
             return output_path, new_cloud_url
         
-        # If cloud_url exists, download from Gofile
+        # If cloud_url exists, download from HuggingFace
         if cloud_url:
-            logger.info(f"☁️ Cloud URL exists, downloading from Gofile...")
+            logger.info(f"☁️ Cloud URL exists, downloading from HuggingFace...")
             if self.download_from_cloud(cloud_url, output_path):
                 return output_path, cloud_url
             else:
-                logger.error("❌ Failed to download from Gofile!")
-                return None, cloud_url
+                logger.warning("⚠️ Failed to download from HuggingFace, trying YouTube...")
         
-        # No cloud_url - need to download from YouTube and upload to Gofile
-        logger.info(f"📺 No cloud URL - downloading from YouTube first...")
-        
+        # Download from YouTube
+        logger.info(f"📺 Downloading from YouTube...")
         if not self.download_from_youtube(video_url, output_path):
             logger.error("❌ Failed to download from YouTube")
             return None, None
         
-        # Upload to Gofile for future runs
-        logger.info(f"☁️ Uploading to Gofile for future runs...")
-        cloud_info = self.upload_to_cloud(output_path)
-        
-        if cloud_info:
-            new_cloud_url = cloud_info.get('download_page')
-            logger.info(f"✅ Uploaded to Gofile: {new_cloud_url}")
+        # Upload to HuggingFace for future runs
+        if self.cloud.is_configured():
+            logger.info(f"☁️ Uploading to HuggingFace for future runs...")
+            new_cloud_url = self.upload_to_cloud(output_path, video_id)
+            if new_cloud_url:
+                logger.info(f"✅ Uploaded to HuggingFace: {new_cloud_url}")
         else:
-            logger.warning("⚠️ Failed to upload to Gofile, but local file exists")
+            logger.info("ℹ️ HuggingFace not configured, video will be re-downloaded next run")
         
         return output_path, new_cloud_url
 
@@ -128,12 +136,14 @@ if __name__ == "__main__":
     print("Testing connections...")
     downloader = VideoDownloader()
     
-    # Test Gofile
-    server = downloader.cloud.get_best_server()
-    print(f"Gofile: {server}" if server else "Gofile: Failed")
+    # Test HuggingFace
+    if downloader.cloud.is_configured():
+        print("✅ HuggingFace configured")
+    else:
+        print("⚠️ HuggingFace not configured (optional)")
     
     # Test cookies
     if os.path.exists('youtube_cookies.txt'):
-        print("Cookies: Found")
+        print("✅ Cookies file found")
     else:
-        print("Cookies: Not found")
+        print("⚠️ Cookies file not found")

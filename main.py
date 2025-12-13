@@ -235,7 +235,7 @@ class YouTubeShortsAutomation:
         
         # Check if video is already complete
         if next_part_to_upload > total_parts:
-            logger.info(f"✅ Video already complete! Cleaning up...")
+            logger.info(f"✅ Video complete! Cleaning up...")
             self.tracking['videos'][video_id]['status'] = 'completed'
             
             # Delete local video file to save space
@@ -243,8 +243,12 @@ class YouTubeShortsAutomation:
                 os.remove(video_path)
                 logger.info(f"🗑️ Deleted local video: {video_path}")
             
-            # Cloud file will auto-delete after inactivity (Gofile policy)
-            logger.info(f"☁️ Cloud file will auto-delete after inactivity")
+            # Delete from cloud storage (HuggingFace)
+            cloud_url = video_data.get('cloud_url')
+            if cloud_url:
+                logger.info(f"🗑️ Deleting from cloud storage...")
+                self.downloader.delete_from_cloud(cloud_url)
+                self.tracking['videos'][video_id]['cloud_url'] = None  # Clear URL
             
             self._save_tracking()
             # Recursively process next video
