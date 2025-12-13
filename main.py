@@ -3,9 +3,10 @@ YouTube to YouTube Shorts Automation
 Main orchestration script - OPTIMIZED for incremental processing
 
 Key Features:
-- Only processes segments that need to be uploaded (not all)
+- Cloud Sync Phase: Backups videos to HuggingFace (to avoid frequent YouTube downloads)
+- Serial Processing: Processes one video at a time until completion
+- Only processes segments that need to be uploaded
 - Resumes from where it left off
-- Max 3 uploads per run
 - Tracks progress in tracking.json
 """
 import argparse
@@ -107,7 +108,7 @@ class YouTubeShortsAutomation:
                     'youtube_video_ids': [],
                     'downloaded_at': None,
                     'last_upload': None,
-                    'cloud_url': None  # Gofile cloud storage URL
+                    'cloud_url': None  # HuggingFace cloud storage URL
                 }
             else:
                 # Update views and published date
@@ -141,280 +142,296 @@ class YouTubeShortsAutomation:
     
     def run_full_automation(self):
         """
-        Run complete automation pipeline - OPTIMIZED
+        Run complete automation pipeline - DUAL PHASE
         
-        Key optimizations:
-        1. Only create segments we need (not all)
-        2. Only edit segments we need
-        3. Max 3 uploads per run
-        4. Resume from last uploaded part
+        Phase 1: Cloud Sync (Backup assets to HuggingFace)
+        Phase 2: Serial Processing (Process 1 video)
         """
         logger.info("=" * 60)
-        logger.info("=== Starting Full Automation (Optimized) ===")
+        logger.info("=== Starting Full Automation (Cloud Sync + Processing) ===")
         logger.info("=" * 60)
         
         # 1. Scrape channel for latest videos
         self.scrape_channel()
         
-        # 2. Find next video to process
-        video_id, video_data = self.get_next_video_to_process()
-        if not video_id:
-            logger.info("🎉 All videos processed!")
-            logger.info("   No more videos to upload!")
+        # --- PHASE 1: CLOUD SYNC ---
+        logger.info("\n" + "=" * 40)
+        logger.info("=== PHASE 1: CLOUD SYNC ===")
+        logger.info("=" * 40)
+        
+        # Find videos needing sync (pending/partial but no cloud_url)
+        videos_to_sync = []
+        for vid_id, data in self.tracking['videos'].items():
+            if data['status'] in ['pending', 'partial'] and not data.get('cloud_url'):
+                videos_to_sync.append((vid_id, data))
+        
+        # Sync up to 5 per run to respect execution time limits
+        MAX_SYNC_PER_RUN = 5
+        
+        if not videos_to_sync:
+            logger.info("✅ All current videos are backed up to Cloud!")
+        else:
+            logger.info(f"🔍 Found {len(videos_to_sync)} videos needing sync. Syncing top {MAX_SYNC_PER_RUN}...")
             
-            # Send notification
+            for i, (video_id, video_data) in enumerate(videos_to_sync[:MAX_SYNC_PER_RUN]):
+                logger.info(f"\n☁️ Syncing {i+1}/{MAX_SYNC_PER_RUN}: {video_data['title'][:50]}...")
+                
+                # Fetch video: If no cloud_url, downloader will: YouTube -> Download -> Upload -> Return New URL
+                # We force cloud_url=None to trigger the download/upload flow
+                _, new_cloud_url = self.downloader.download_video(
+                    video_data['url'],
+                    video_id,
+                    cloud_url=None 
+                )
+                
+                if new_cloud_url:
+                    self.tracking['videos'][video_id]['cloud_url'] = new_cloud_url
+                    self._save_tracking()
+                    
+                    # Immediate cleanup of local file to save space
+                    local_path = os.path.join(self.config['paths']['downloads'], f"{video_id}.mp4")
+                    if os.path.exists(local_path):
+                        try:
+                            os.remove(local_path)
+                            logger.info("🗑️ Cleared local temp file")
+                        except:
+                            pass
+                else:
+                     logger.warning(f"⚠️ Failed to sync {video_id}. Will retry next run.")
+
+        logger.info("\n✅ Phase 1 Complete.")
+        
+        # --- PHASE 2: PROCESSING ---
+        logger.info("\n" + "=" * 40)
+        logger.info("=== PHASE 2: PROCESSING SHORTS ===")
+        logger.info("=" * 40)
+        
+        # Find next video to process
+        video_id, video_data = self.get_next_video_to_process()
+        
+        if not video_id:
+            logger.info("🎉 All videos processed! No more videos to upload!")
             try:
                 notify_all_videos_complete()
             except:
                 pass
-            
             return
         
-        logger.info(f"\n📹 Processing: {video_data['title']}")
+        self.process_video_for_shorts(video_id, video_data)
+
+    def process_video_for_shorts(self, video_id, video_data):
+        """Process a single video: Download (Cloud) -> Split -> Edit -> Upload"""
+        logger.info(f"\n📹 Processing Target: {video_data['title']}")
         logger.info(f"   Status: {video_data.get('status')}")
         logger.info(f"   Parts uploaded: {video_data.get('parts_uploaded', [])}")
         logger.info(f"   Cloud URL: {video_data.get('cloud_url', 'Not uploaded yet')}")
         
-        # 3. Download video (from Gofile if available, otherwise YouTube → Gofile)
+        # A. DOWNLOAD (Ideally from Cloud now)
         video_path = os.path.join(self.config['paths']['downloads'], f"{video_id}.mp4")
         cloud_url = video_data.get('cloud_url')
         
         if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000000:
-            logger.info(f"\n📥 Downloading video...")
+            logger.info(f"\n📥 Downloading video for processing...")
             
-            # download_video returns (video_path, new_cloud_url)
             video_path, new_cloud_url = self.downloader.download_video(
                 video_data['url'],
                 video_id,
                 cloud_url=cloud_url
             )
             
-            # Save new cloud_url if we just uploaded to Gofile
+            # If we got a new URL (fallback happened), save it
             if new_cloud_url and new_cloud_url != cloud_url:
                 self.tracking['videos'][video_id]['cloud_url'] = new_cloud_url
                 self._save_tracking()
-                logger.info(f"☁️ Saved new cloud URL: {new_cloud_url}")
             
             if not video_path or not os.path.exists(video_path):
-                logger.warning("⚠️ Could not download video!")
-                logger.warning("   Stopping automation. Please check cookies or video availability.")
+                logger.warning("⚠️ Could not download video for processing!")
+                logger.warning("   Stopping automation. Check logs.")
                 
-                # Send notification (only once)
                 try:
                     from modules.notifier import notify_download_failed
-                    notify_download_failed(video_data['title'], "Hindi audio not available or cookies expired")
+                    notify_download_failed(video_data['title'], "Download failed during processing phase")
                 except:
                     pass
                 
                 self.tracking['videos'][video_id]['status'] = 'download_failed'
                 self._save_tracking()
-                
-                # STOP - Don't retry, wait for next scheduled run
-                logger.info("🛑 Automation stopped. Will retry on next scheduled run.")
-                return
+                return # Stop here
         else:
-            logger.info(f"✓ Video already downloaded: {video_path}")
+            logger.info(f"✓ Video already locally available: {video_path}")
         
-        # 4. Calculate which parts to process
+        # B. ANALYZE & SPLIT
         parts_already_uploaded = video_data.get('parts_uploaded', [])
         next_part_to_upload = max(parts_already_uploaded) + 1 if parts_already_uploaded else 1
         
-        # Calculate total parts for this video
         from modules.splitter import get_video_duration
-        total_duration = get_video_duration(video_path)
-        total_possible_parts = int(total_duration / self.segment_duration)
-        if total_duration % self.segment_duration >= 10:  # Add 1 if remainder >= 10s
-            total_possible_parts += 1
-        
-        # Limit to max_segments_per_video
-        total_parts = min(total_possible_parts, self.max_segments_per_video)
+        try:
+             total_duration = get_video_duration(video_path)
+             # Calculate total parts
+             total_possible_parts = int(total_duration / self.segment_duration)
+             if total_duration % self.segment_duration >= 10:
+                 total_possible_parts += 1
+             
+             total_parts = min(total_possible_parts, self.max_segments_per_video)
+        except Exception as e:
+             logger.error(f"❌ Error calculating duration: {e}")
+             total_parts = self.max_segments_per_video # Fallback
         
         logger.info(f"\n📊 Video Analysis:")
         logger.info(f"   Total duration: {total_duration:.2f}s")
-        logger.info(f"   Total parts (limited to {self.max_segments_per_video}): {total_parts}")
-        logger.info(f"   Parts already uploaded: {parts_already_uploaded}")
-        logger.info(f"   Next part to upload: {next_part_to_upload}")
-        logger.info(f"   Max uploads this run: {self.max_uploads_per_run}")
+        logger.info(f"   Total parts: {total_parts}")
+        logger.info(f"   Next part: {next_part_to_upload}")
         
-        # Check if video is already complete
+        # Check Completion
         if next_part_to_upload > total_parts:
             logger.info(f"✅ Video complete! Cleaning up...")
             self.tracking['videos'][video_id]['status'] = 'completed'
             
-            # Delete local video file to save space
+            # Delete local
             if os.path.exists(video_path):
                 os.remove(video_path)
-                logger.info(f"🗑️ Deleted local video: {video_path}")
             
-            # Delete from cloud storage (HuggingFace)
+            # Delete from cloud (HuggingFace) to free space - OPTIONAL since user has 100GB
+            # User said "jabtam sare video part part me upload kerna khatam na hojaye"
+            # It implies we delete AFTER processing is done.
             cloud_url = video_data.get('cloud_url')
             if cloud_url:
-                logger.info(f"🗑️ Deleting from cloud storage...")
+                logger.info(f"🗑️ Deleting from cloud storage (Video Complete)...")
                 self.downloader.delete_from_cloud(cloud_url)
-                self.tracking['videos'][video_id]['cloud_url'] = None  # Clear URL
+                self.tracking['videos'][video_id]['cloud_url'] = None
             
             self._save_tracking()
-            # Recursively process next video
+            
+            # Recursively start next video?
+            # User: "jab 1 video ke sare part upload hona khatam hojaye tab dusre video pe jayenge"
+            # So yes, we should start the next one.
+            logger.info("➡️ Moving to next video...")
             return self.run_full_automation()
-        
-        # 5. Calculate which parts to process THIS RUN
+
+        # C. PROCESS SEGMENTS
         parts_to_process = []
         for part_num in range(next_part_to_upload, total_parts + 1):
             if len(parts_to_process) >= self.max_uploads_per_run:
                 break
             parts_to_process.append(part_num)
+            
+        logger.info(f"\n🎯 Processing parts: {parts_to_process}")
         
-        logger.info(f"\n🎯 This run will process parts: {parts_to_process}")
-        
-        # 6. Create ONLY the segments we need
-        logger.info(f"\n✂️ Creating only required segments...")
         processed_dir = self.config['paths']['processed']
-        
         segments_to_upload = []
         
         for part_num in parts_to_process:
-            # Calculate time range for this segment
             start_time = (part_num - 1) * self.segment_duration
-            end_time = min(part_num * self.segment_duration, total_duration)
+            end_time = min(start_time + self.segment_duration, total_duration)
             
-            # Create segment filename
             segment_filename = f"{video_id}_part{part_num}.mp4"
             segment_path = os.path.join(processed_dir, segment_filename)
             edited_filename = f"{video_id}_part{part_num}_edited.mp4"
             edited_path = os.path.join(processed_dir, edited_filename)
             
-            # Create segment using FFmpeg
-            logger.info(f"\n--- Part {part_num} ---")
-            logger.info(f"Creating segment: {start_time:.2f}s - {end_time:.2f}s")
+            # Create/Split
+            if not os.path.exists(segment_path):
+                logger.info(f"Creating part {part_num}...")
+                from modules.splitter import split_video
+                result_path = split_video(video_path, start_time, end_time, processed_dir, segment_filename)
+                if not result_path:
+                    logger.error(f"Failed to split part {part_num}")
+                    continue
             
-            import subprocess
-            cmd = [
-                'ffmpeg', '-y',
-                '-ss', str(start_time),
-                '-i', video_path,
-                '-t', str(end_time - start_time),
-                '-c:v', 'libx264',
-                '-preset', 'slow',  # Good quality encoding
-                '-c:a', 'aac',
-                '-b:a', '256k',  # Good audio quality
-                '-loglevel', 'error',
-                segment_path
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error(f"Failed to create segment {part_num}: {result.stderr}")
-                continue
-            
-            logger.info(f"✓ Segment {part_num} created")
-            
-            # Edit segment (add overlay, convert to 9:16)
-            logger.info(f"Editing segment {part_num}...")
+            # Edit
+            logger.info(f"Editing part {part_num}...")
             edited_result = self.editor.add_overlays(
-                segment_path, 
-                part_num, 
-                video_data['title'],
-                edited_path
+                segment_path, part_num, video_data['title'], edited_path
             )
             
             if edited_result:
-                logger.info(f"✓ Segment {part_num} edited")
                 segments_to_upload.append((edited_path, part_num, video_data['title']))
-                
-                # Clean up raw segment to save space
+                # Clean raw segment
                 if os.path.exists(segment_path):
                     os.remove(segment_path)
             else:
-                logger.error(f"Failed to edit segment {part_num}")
-        
-        if not segments_to_upload:
-            logger.error("No segments to upload!")
-            return
-        
-        # 7. Upload segments
-        logger.info(f"\n📤 Uploading {len(segments_to_upload)} segments to YouTube...")
+                 logger.error(f"Failed to edit part {part_num}")
+
+        # D. UPLOAD
+        logger.info(f"\n🚀 Uploading {len(segments_to_upload)} segments...")
         
         upload_config = self.config['youtube_upload']
-        uploaded_parts = list(parts_already_uploaded)  # Copy existing
+        uploaded_parts = list(parts_already_uploaded)
         uploaded_ids = list(video_data.get('youtube_video_ids', []))
         
         for edited_path, part_num, title in segments_to_upload:
-            # Generate title and description
-            upload_title = upload_config['title_template'].format(
-                title=title,
-                part=part_num
+            title_text = f"{title} - Part {part_num}"
+            if len(title_text) > 95:
+                title_text = title[:90] + f"... - Part {part_num}"
+            
+            final_title = f"{title_text} #shorts #mrbeast"
+            
+            description = upload_config['description_template'].format(
+                title=title, part=part_num, total=total_parts, url=video_data['url']
             )
             
-            # Ensure title doesn't exceed 99 characters (YouTube limit is 100)
-            if len(upload_title) > 99:
-                # Calculate how much to trim from the original title
-                hashtags = " #shorts #viral #mrbeast"
-                part_text = f" - Part {part_num}"
-                available_chars = 99 - len(hashtags) - len(part_text) - 3  # -3 for "..."
-                truncated_title = title[:available_chars] + "..."
-                upload_title = f"{truncated_title}{part_text}{hashtags}"
-                logger.info(f"Title truncated to {len(upload_title)} chars")
+            # Check Daily Limit
+            if self.uploader.is_daily_limit_reached():
+                logger.warning("⚠️ Daily upload limit reached!")
+                break
             
-            upload_description = upload_config['description_template'].format(
-                title=title,
-                part=part_num,
-                total=total_parts,
-                url=video_data['url']
-            )
-            
-            # Upload
             try:
-                yt_video_id = self.uploader.upload_short(
-                    video_path=edited_path,
-                    title=upload_title,
-                    description=upload_description,
-                    tags=upload_config['tags'],
-                    category_id=upload_config['category_id'],
-                    privacy_status=upload_config['privacy_status']
+                # Assuming upload_short exists in uploader
+                yt_id = self.uploader.upload_short(
+                    edited_path, 
+                    final_title, 
+                    description,
+                    upload_config['tags'],
+                    upload_config['category_id'],
+                    upload_config['privacy_status']
                 )
                 
-                if yt_video_id:
+                if yt_id:
+                    logger.info(f"✅ Uploaded: https://youtube.com/shorts/{yt_id}")
                     uploaded_parts.append(part_num)
-                    uploaded_ids.append(yt_video_id)
-                    logger.info(f"✓ Part {part_num} uploaded: https://youtube.com/shorts/{yt_video_id}")
-                else:
-                    logger.error(f"✗ Part {part_num} upload failed")
-                
+                    uploaded_ids.append(yt_id)
                     
-            except Exception as e:
-                logger.error(f"Error uploading part {part_num}: {e}")
+                    self.tracking['videos'][video_id]['parts_uploaded'] = sorted(uploaded_parts)
+                    self.tracking['videos'][video_id]['youtube_video_ids'] = uploaded_ids
+                    
+                    if part_num == 1:
+                        self.tracking['videos'][video_id]['status'] = 'partial'
+                    
+                    self._save_tracking()
+                    
+                    try:
+                        notify_video_uploaded(final_title, part_num, total_parts)
+                    except:
+                        pass
+                else:
+                    logger.error("Upload returned no ID (Quota?)")
             
-            # Clean up edited segment after upload
+            except Exception as e:
+                logger.error(f"Upload Error: {e}")
+            
+            # Cleanup edited file
             if os.path.exists(edited_path):
                 os.remove(edited_path)
         
-        # 8. Update tracking
-        self.tracking['videos'][video_id]['parts_uploaded'] = sorted(uploaded_parts)
-        self.tracking['videos'][video_id]['total_parts'] = total_parts
-        self.tracking['videos'][video_id]['youtube_video_ids'] = uploaded_ids
-        self.tracking['videos'][video_id]['last_upload'] = datetime.now().isoformat()
-        
-        # Check if video is now complete
+        # Check completion after uploads
         if len(uploaded_parts) >= total_parts:
             self.tracking['videos'][video_id]['status'] = 'completed'
-            logger.info(f"\n🎉 Video COMPLETED! All {total_parts} parts uploaded.")
-        else:
-            self.tracking['videos'][video_id]['status'] = 'partial'
-            remaining = total_parts - len(uploaded_parts)
-            logger.info(f"\n📊 Progress: {len(uploaded_parts)}/{total_parts} parts uploaded")
-            logger.info(f"   Remaining: {remaining} parts")
-        
-        self._save_tracking()
-        
-        # Summary
-        logger.info("\n" + "=" * 60)
-        logger.info("=== Automation Complete ===")
-        logger.info("=" * 60)
-        logger.info(f"Video: {video_data['title']}")
-        logger.info(f"Parts uploaded this run: {parts_to_process}")
-        logger.info(f"Total parts uploaded: {len(uploaded_parts)}/{total_parts}")
-        logger.info(f"Status: {self.tracking['videos'][video_id]['status']}")
-    
+            logger.info("🎉 Video completed!")
+            
+            # Re-trigger cleanup logic (delete from cloud) by calling recursively or next run
+            # For now, just save. Next run will catch it as 'completed' or we can handle it now.
+            # Best to let next run 'move on' or just delete now:
+            
+            if os.path.exists(video_path):
+                os.remove(video_path)
+            
+            if cloud_url:
+                logger.info(f"🗑️ Deleting from cloud storage...")
+                self.downloader.delete_from_cloud(cloud_url)
+                self.tracking['videos'][video_id]['cloud_url'] = None
+            
+            self._save_tracking()
+
     def show_status(self):
         """Show current tracking status"""
         print("\n" + "=" * 60)
