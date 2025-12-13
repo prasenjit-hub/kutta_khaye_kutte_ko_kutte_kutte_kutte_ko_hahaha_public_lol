@@ -8,6 +8,7 @@ YouTube Video Downloader with HuggingFace Cloud Storage
 import subprocess
 import os
 import logging
+import json
 from typing import Optional, Tuple
 from modules.cloud_storage import HuggingFaceStorage
 
@@ -21,10 +22,58 @@ class VideoDownloader:
         os.makedirs(download_dir, exist_ok=True)
         self.cloud = HuggingFaceStorage()
     
+    def get_hindi_audio_format(self, video_url: str) -> Optional[str]:
+        """
+        Find Hindi audio format ID from video
+        Returns format ID like '251-7' for Hindi audio
+        """
+        logger.info("🔍 Checking for Hindi audio track...")
+        
+        cmd = [
+            'yt-dlp',
+            '--cookies', 'youtube_cookies.txt',
+            '-J',  # JSON output
+            '--no-download',
+            video_url
+        ]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            
+            if result.returncode != 0:
+                logger.warning(f"⚠️ Could not get video info: {result.stderr[-200:]}")
+                return None
+            
+            data = json.loads(result.stdout)
+            formats = data.get('formats', [])
+            
+            # Find Hindi audio format
+            hindi_audio_id = None
+            for fmt in formats:
+                lang = fmt.get('language') or ''
+                if lang.lower() in ['hi', 'hin', 'hindi']:
+                    if fmt.get('acodec') != 'none':  # Is audio
+                        hindi_audio_id = fmt.get('format_id')
+                        logger.info(f"✅ Found Hindi audio: format_id={hindi_audio_id}")
+                        break
+            
+            if not hindi_audio_id:
+                logger.warning("⚠️ No Hindi audio track found in this video")
+                return None
+            
+            return hindi_audio_id
+            
+        except json.JSONDecodeError:
+            logger.error("❌ Failed to parse video info")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error checking formats: {e}")
+            return None
+    
     def download_from_youtube(self, video_url: str, output_path: str) -> bool:
         """
         Download from YouTube with Hindi audio ONLY
-        Uses cookies from secrets
+        First checks if Hindi audio exists, then downloads
         """
         logger.info(f"📥 Downloading from YouTube with HINDI audio...")
         
@@ -32,34 +81,44 @@ class VideoDownloader:
             logger.error("❌ youtube_cookies.txt not found! Add YOUTUBE_COOKIES secret.")
             return False
         
+        logger.info("🍪 Using cookies for authentication")
+        
+        # First, find Hindi audio format
+        hindi_format = self.get_hindi_audio_format(video_url)
+        
+        if not hindi_format:
+            logger.warning("⚠️ Hindi audio not available - skipping this video")
+            return False
+        
+        # Build format string with specific Hindi audio
+        format_str = f'bestvideo[height<=1080][ext=mp4]+{hindi_format}/bestvideo[height<=1080]+{hindi_format}'
+        
         cmd = [
             'yt-dlp',
             '--cookies', 'youtube_cookies.txt',
-            '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[language=hi]/bestvideo[height<=1080]+bestaudio[language=hi]',
+            '-f', format_str,
             '--merge-output-format', 'mp4',
             '-o', output_path,
             video_url
         ]
         
         try:
-            logger.info("🍪 Using cookies for authentication")
+            logger.info(f"📥 Downloading with Hindi audio (format: {hindi_format})...")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
             
             if result.returncode == 0 and os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
                 if file_size > 1000000:
-                    logger.info(f"✅ YouTube download complete: {output_path} ({file_size // 1024 // 1024} MB)")
+                    logger.info(f"✅ Download complete: {output_path} ({file_size // 1024 // 1024} MB)")
                     return True
             
             # Check error
             if result.stderr:
                 stderr = result.stderr.lower()
-                if 'requested format' in stderr:
-                    logger.warning("⚠️ Hindi audio not available for this video")
-                elif 'sign in' in stderr:
+                if 'sign in' in stderr:
                     logger.error("❌ Cookies expired! Please refresh YOUTUBE_COOKIES secret.")
                 else:
-                    logger.error(f"❌ Error: {result.stderr[-300:]}")
+                    logger.error(f"❌ Download error: {result.stderr[-300:]}")
             return False
             
         except subprocess.TimeoutExpired:

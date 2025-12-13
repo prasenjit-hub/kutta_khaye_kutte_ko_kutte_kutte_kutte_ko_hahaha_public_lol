@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# Repository link for secrets
+REPO_SECRETS_URL = "https://github.com/prasenjit-hub/kutta_khaye_kutte_ko_kutte_kutte_kutte_ko_hahaha_public_lol/settings/secrets/actions"
+
 
 def send_telegram_message(message: str) -> bool:
     """Send a message via Telegram bot"""
@@ -25,7 +28,8 @@ def send_telegram_message(message: str) -> bool:
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "HTML"
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False
     }
     
     try:
@@ -43,16 +47,20 @@ def send_telegram_message(message: str) -> bool:
 
 def notify_cookies_needed():
     """Send notification that cookies need refresh"""
-    message = """🍪 <b>COOKIES REFRESH NEEDED!</b>
+    message = f"""🍪 <b>COOKIES REFRESH NEEDED!</b>
 
-Your YouTube automation needs fresh cookies.
+YouTube automation ko fresh cookies chahiye.
 
 <b>Steps:</b>
-1. Open YouTube in browser (logged in)
-2. Export cookies using browser extension
-3. Encode and update YOUTUBE_COOKIES secret in GitHub
+1. YouTube open karo browser mein (logged in)
+2. Cookies export karo
+3. Base64 encode karo
+4. YOUTUBE_COOKIES secret update karo
 
-⏰ Please refresh within 24 hours!"""
+🔗 <b>Direct Link:</b>
+{REPO_SECRETS_URL}
+
+⏰ Please 24 hours mein refresh karo!"""
     
     return send_telegram_message(message)
 
@@ -61,11 +69,11 @@ def notify_all_videos_complete():
     """Send notification that all videos are processed"""
     message = """🎉 <b>ALL VIDEOS COMPLETE!</b>
 
-All video parts have been uploaded to YouTube Shorts!
+Sab video parts YouTube Shorts pe upload ho gaye!
 
 <b>What to do:</b>
-1. Check your YouTube channel
-2. Update cookies if you want to process new videos
+1. YouTube channel check karo
+2. Naye videos ke liye cookies refresh karo
 
 ✅ Great work! Channel growing! 📈"""
     
@@ -78,10 +86,27 @@ def notify_video_uploaded(video_title: str, part_num: int, total_parts: int):
     
     message = f"""✅ <b>Part Uploaded!</b>
 
-📹 <b>{video_title}</b>
+📹 <b>{video_title[:50]}</b>
 📊 Part {part_num}/{total_parts}
 
 {complete_emoji}"""
+    
+    return send_telegram_message(message)
+
+
+def notify_download_failed(video_title: str, reason: str = ""):
+    """Send notification when download fails"""
+    message = f"""⚠️ <b>DOWNLOAD FAILED!</b>
+
+📹 Video: <b>{video_title[:50]}</b>
+❌ Reason: {reason or 'Hindi audio not available or cookies expired'}
+
+<b>Action needed:</b>
+1. Check if video has Hindi audio
+2. Refresh cookies if expired
+
+🔗 <b>Secrets Link:</b>
+{REPO_SECRETS_URL}"""
     
     return send_telegram_message(message)
 
@@ -92,7 +117,8 @@ def notify_error(error_message: str):
 
 {error_message}
 
-Please check the GitHub Actions logs for details."""
+🔗 <b>Check Logs:</b>
+https://github.com/prasenjit-hub/kutta_khaye_kutte_ko_kutte_kutte_kutte_ko_hahaha_public_lol/actions"""
     
     return send_telegram_message(message)
 

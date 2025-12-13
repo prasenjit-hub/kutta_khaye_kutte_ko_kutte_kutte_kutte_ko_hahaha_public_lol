@@ -197,18 +197,21 @@ class YouTubeShortsAutomation:
             
             if not video_path or not os.path.exists(video_path):
                 logger.warning("⚠️ Could not download video!")
+                logger.warning("   Stopping automation. Please check cookies or video availability.")
                 
-                # Send notification for cookies refresh
+                # Send notification (only once)
                 try:
-                    notify_cookies_needed()
+                    from modules.notifier import notify_download_failed
+                    notify_download_failed(video_data['title'], "Hindi audio not available or cookies expired")
                 except:
                     pass
                 
                 self.tracking['videos'][video_id]['status'] = 'download_failed'
                 self._save_tracking()
                 
-                # Try next video
-                return self.run_full_automation()
+                # STOP - Don't retry, wait for next scheduled run
+                logger.info("🛑 Automation stopped. Will retry on next scheduled run.")
+                return
         else:
             logger.info(f"✓ Video already downloaded: {video_path}")
         
