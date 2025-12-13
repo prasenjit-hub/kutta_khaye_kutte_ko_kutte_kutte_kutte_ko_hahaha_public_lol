@@ -1,13 +1,12 @@
 """
-YouTube Video Downloader - HINDI ONLY VERSION with Cloud Storage
-For LOCAL batch download: Uses cookies file
-For GitHub Actions: Uses cloud storage (Gofile)
+YouTube Video Downloader - HINDI ONLY VERSION
+Uses yt-dlp with --remote-components for proper Hindi audio detection
+Cookies from youtube_cookies.txt (decoded from secrets)
 """
-import yt_dlp
+import subprocess
 import os
 import logging
-from typing import Optional, Dict
-from modules.cloud_storage import GofileStorage
+from typing import Optional
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,121 +16,108 @@ class VideoDownloader:
     def __init__(self, download_dir: str = "downloads"):
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
-        self.cloud = GofileStorage()
     
-    def download_from_youtube(self, video_url: str, output_path: str) -> bool:
+    def download_video(self, video_url: str, video_id: str, prefer_hindi: bool = True) -> Optional[str]:
         """
-        Download video from YouTube with Hindi audio using yt-dlp
-        Requires youtube_cookies.txt to be present
-        """
-        logger.info(f"📥 Downloading from YouTube with HINDI audio...")
+        Download video with HINDI audio only using yt-dlp CLI
+        Uses --remote-components ejs:github for proper YouTube extraction
         
-        # Check for cookies
-        if not os.path.exists('youtube_cookies.txt'):
-            logger.error("❌ youtube_cookies.txt not found!")
-            logger.error("   Please export cookies from browser and save as youtube_cookies.txt")
-            return False
+        Args:
+            video_url: YouTube video URL
+            video_id: Video ID for filename
+            prefer_hindi: Must be True for Hindi-only version
         
-        ydl_opts = {
-            'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[language=hi]/bestvideo[height<=1080]+bestaudio[language=hi]',
-            'outtmpl': output_path,
-            'merge_output_format': 'mp4',
-            'cookiefile': 'youtube_cookies.txt',
-            'quiet': False,
-            'no_warnings': False,
-        }
-        
-        logger.info("🍪 Using cookies for YouTube download")
-        
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([video_url])
-            
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000000:
-                logger.info(f"✅ YouTube download complete: {output_path}")
-                return True
-            return False
-            
-        except Exception as e:
-            error_msg = str(e).lower()
-            if 'sign in' in error_msg or 'bot' in error_msg:
-                logger.error("❌ Cookies expired or invalid!")
-                logger.error("   Please refresh cookies from browser")
-            elif 'requested format' in error_msg:
-                logger.error("❌ Hindi audio not available for this video")
-            else:
-                logger.error(f"❌ YouTube download error: {e}")
-            return False
-    
-    def upload_to_cloud(self, file_path: str) -> Optional[Dict]:
-        """Upload downloaded video to Gofile for persistent storage"""
-        logger.info(f"☁️ Uploading to Gofile cloud storage...")
-        return self.cloud.upload_file(file_path)
-    
-    def download_from_cloud(self, gofile_url: str, output_path: str) -> bool:
-        """Download video from Gofile cloud storage"""
-        logger.info(f"☁️ Downloading from Gofile: {gofile_url}")
-        return self.cloud.download_file(gofile_url, output_path)
-    
-    def download_video(self, video_url: str, video_id: str, 
-                       cloud_url: str = None, prefer_hindi: bool = True) -> Optional[str]:
-        """
-        Download video - from cloud if available, otherwise from YouTube
+        Returns:
+            Path to downloaded file or None if Hindi audio not available
         """
         output_path = os.path.join(self.download_dir, f"{video_id}.mp4")
         
-        # Check if already downloaded locally
+        # Check if already downloaded
         if os.path.exists(output_path):
             file_size = os.path.getsize(output_path)
             if file_size > 1000000:  # > 1MB
-                logger.info(f"✓ Video already exists locally: {output_path}")
+                logger.info(f"✓ Video already downloaded: {output_path}")
                 return output_path
             else:
-                os.remove(output_path)
+                os.remove(output_path)  # Remove incomplete file
         
-        # Try downloading from cloud first (for GitHub Actions)
-        if cloud_url:
-            logger.info(f"🌐 Downloading from Gofile cloud...")
-            if self.download_from_cloud(cloud_url, output_path):
-                return output_path
+        logger.info(f"📥 Downloading video with HINDI audio: {video_url}")
+        
+        # Build yt-dlp command
+        cmd = [
+            'yt-dlp',
+            '--remote-components', 'ejs:github',  # Enable JS challenge solving
+            '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[language=hi]/bestvideo[height<=1080]+bestaudio[language=hi]',
+            '--merge-output-format', 'mp4',
+            '-o', output_path,
+        ]
+        
+        # Add cookies if available
+        if os.path.exists('youtube_cookies.txt'):
+            logger.info("🍪 Using cookies for authentication")
+            cmd.extend(['--cookies', 'youtube_cookies.txt'])
+        else:
+            logger.warning("⚠️ No cookies file found - may fail without authentication")
+        
+        cmd.append(video_url)
+        
+        try:
+            logger.info(f"Running yt-dlp with remote-components...")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=900  # 15 minute timeout
+            )
+            
+            # Log output for debugging
+            if result.stdout:
+                for line in result.stdout.split('\n')[-10:]:  # Last 10 lines
+                    if line.strip():
+                        logger.info(f"  {line}")
+            
+            if result.returncode == 0:
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 1000000:
+                    logger.info(f"✅ Download complete (Hindi audio): {output_path}")
+                    return output_path
+                else:
+                    logger.error("❌ Download seemed successful but file not found or too small")
+                    return None
             else:
-                logger.warning("⚠️ Cloud download failed")
+                stderr = result.stderr.lower() if result.stderr else ""
+                
+                # Check error type
+                if 'requested format is not available' in stderr:
+                    logger.warning(f"⚠️ Hindi audio NOT AVAILABLE for this video. Skipping...")
+                elif 'sign in to confirm' in stderr:
+                    logger.error("❌ Cookies expired or invalid. Please refresh cookies!")
+                elif 'no video formats' in stderr:
+                    logger.warning(f"⚠️ Could not extract video formats. Skipping...")
+                else:
+                    # Log the actual error
+                    logger.error(f"❌ Download failed:")
+                    for line in (result.stderr or "").split('\n')[-5:]:
+                        if line.strip():
+                            logger.error(f"  {line}")
+                
                 return None
-        
-        # No cloud URL - need to download from YouTube (local only)
-        logger.warning("⚠️ No cloud URL available")
-        logger.warning("   Run batch_download.py locally to upload videos to cloud")
-        return None
-    
-    def download_and_upload_to_cloud(self, video_url: str, video_id: str) -> Optional[Dict]:
-        """
-        Download from YouTube and upload to cloud storage
-        Used by batch_download.py for local processing
-        """
-        output_path = os.path.join(self.download_dir, f"{video_id}.mp4")
-        
-        # Download from YouTube
-        if not self.download_from_youtube(video_url, output_path):
+                
+        except subprocess.TimeoutExpired:
+            logger.error("❌ Download timed out (15 minutes)")
             return None
-        
-        # Upload to cloud
-        cloud_info = self.upload_to_cloud(output_path)
-        
-        if cloud_info:
-            logger.info(f"✅ Video saved to cloud: {cloud_info.get('download_page')}")
-            # Delete local file to save space
-            # os.remove(output_path)
-        
-        return cloud_info
+        except Exception as e:
+            logger.error(f"❌ Error: {e}")
+            return None
 
 
 if __name__ == "__main__":
     # Test downloader
     downloader = VideoDownloader()
     
-    print("Testing Gofile connection...")
-    server = downloader.cloud.get_best_server()
-    if server:
-        print(f"✅ Connected to Gofile server: {server}")
+    print("Testing yt-dlp availability...")
+    result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"✅ yt-dlp version: {result.stdout.strip()}")
     else:
-        print("❌ Could not connect to Gofile")
+        print("❌ yt-dlp not found")

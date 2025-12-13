@@ -173,53 +173,36 @@ class YouTubeShortsAutomation:
         logger.info(f"\n📹 Processing: {video_data['title']}")
         logger.info(f"   Status: {video_data.get('status')}")
         logger.info(f"   Parts uploaded: {video_data.get('parts_uploaded', [])}")
-        logger.info(f"   Cloud URL: {video_data.get('cloud_url', 'Not uploaded')}")
         
-        # 3. Download video - try cloud first, then YouTube
+        # 3. Download video from YouTube with Hindi audio
         video_path = os.path.join(self.config['paths']['downloads'], f"{video_id}.mp4")
-        cloud_url = video_data.get('cloud_url')
         
         if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000000:
-            logger.info(f"\n📥 Downloading video...")
+            logger.info(f"\n📥 Downloading video from YouTube...")
             
-            # Try cloud storage first (if URL available)
-            if cloud_url:
-                logger.info(f"☁️ Downloading from Gofile cloud...")
-                video_path = self.downloader.download_video(
-                    video_data['url'],
-                    video_id,
-                    cloud_url=cloud_url
-                )
-            else:
-                # Download from YouTube and upload to cloud
-                logger.info(f"📺 Downloading from YouTube (first time)...")
-                cloud_info = self.downloader.download_and_upload_to_cloud(
-                    video_data['url'],
-                    video_id
-                )
-                
-                if cloud_info:
-                    # Save cloud URL for future runs
-                    self.tracking['videos'][video_id]['cloud_url'] = cloud_info.get('download_page')
-                    self._save_tracking()
-                    logger.info(f"☁️ Video saved to cloud: {cloud_info.get('download_page')}")
-                    video_path = os.path.join(self.config['paths']['downloads'], f"{video_id}.mp4")
-                else:
-                    video_path = None
+            video_path = self.downloader.download_video(
+                video_data['url'],
+                video_id,
+                prefer_hindi=True
+            )
             
             if not video_path or not os.path.exists(video_path):
-                logger.warning("⚠️ Could not download video - no cloud URL available!")
-                logger.warning("   Please run batch_download.py locally to upload videos to cloud")
+                logger.warning("⚠️ Could not download video!")
                 
-                # Send Telegram notification
+                # Check if it's a cookies issue
+                error_status = 'skipped_no_hindi'
+                
+                # Send notification for cookies refresh
                 try:
                     notify_cookies_needed()
                 except:
                     pass
                 
-                self.tracking['videos'][video_id]['status'] = 'needs_cloud_upload'
+                self.tracking['videos'][video_id]['status'] = error_status
                 self._save_tracking()
-                return  # Stop processing, wait for cloud upload
+                
+                # Try next video
+                return self.run_full_automation()
         else:
             logger.info(f"✓ Video already downloaded: {video_path}")
         
