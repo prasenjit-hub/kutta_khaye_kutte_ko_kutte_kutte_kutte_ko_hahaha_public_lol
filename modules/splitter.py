@@ -11,6 +11,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+
+
 def get_video_duration(video_path: str) -> float:
     """Get video duration using ffprobe"""
     try:
@@ -25,6 +27,44 @@ def get_video_duration(video_path: str) -> float:
     except Exception as e:
         logger.error(f"Error getting duration: {e}")
         return 0
+
+
+def split_video(video_path: str, start_time: float, end_time: float, output_dir: str, output_filename: str) -> str:
+    """
+    Split a specific segment from video using FFmpeg.
+    Returns path to created segment or None if failed.
+    """
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, output_filename)
+        duration = end_time - start_time
+        
+        cmd = [
+            'ffmpeg', '-y',
+            '-ss', str(start_time),
+            '-i', video_path,
+            '-t', str(duration),
+            '-c:v', 'libx264',
+            '-preset', 'slow',
+            '-c:a', 'aac',
+            '-b:a', '256k',
+            '-loglevel', 'error',
+            output_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg error: {result.stderr}")
+            return None
+            
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            return output_path
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error splitting segment: {e}")
+        return None
+
 
 
 class VideoSplitter:
