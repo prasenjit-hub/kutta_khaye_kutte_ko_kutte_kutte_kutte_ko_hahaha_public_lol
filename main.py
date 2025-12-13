@@ -173,24 +173,30 @@ class YouTubeShortsAutomation:
         logger.info(f"\n📹 Processing: {video_data['title']}")
         logger.info(f"   Status: {video_data.get('status')}")
         logger.info(f"   Parts uploaded: {video_data.get('parts_uploaded', [])}")
+        logger.info(f"   Cloud URL: {video_data.get('cloud_url', 'Not uploaded yet')}")
         
-        # 3. Download video from YouTube with Hindi audio
+        # 3. Download video (from Gofile if available, otherwise YouTube → Gofile)
         video_path = os.path.join(self.config['paths']['downloads'], f"{video_id}.mp4")
+        cloud_url = video_data.get('cloud_url')
         
         if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000000:
-            logger.info(f"\n📥 Downloading video from YouTube...")
+            logger.info(f"\n📥 Downloading video...")
             
-            video_path = self.downloader.download_video(
+            # download_video returns (video_path, new_cloud_url)
+            video_path, new_cloud_url = self.downloader.download_video(
                 video_data['url'],
                 video_id,
-                prefer_hindi=True
+                cloud_url=cloud_url
             )
+            
+            # Save new cloud_url if we just uploaded to Gofile
+            if new_cloud_url and new_cloud_url != cloud_url:
+                self.tracking['videos'][video_id]['cloud_url'] = new_cloud_url
+                self._save_tracking()
+                logger.info(f"☁️ Saved new cloud URL: {new_cloud_url}")
             
             if not video_path or not os.path.exists(video_path):
                 logger.warning("⚠️ Could not download video!")
-                
-                # Check if it's a cookies issue
-                error_status = 'skipped_no_hindi'
                 
                 # Send notification for cookies refresh
                 try:
@@ -198,7 +204,7 @@ class YouTubeShortsAutomation:
                 except:
                     pass
                 
-                self.tracking['videos'][video_id]['status'] = error_status
+                self.tracking['videos'][video_id]['status'] = 'download_failed'
                 self._save_tracking()
                 
                 # Try next video
