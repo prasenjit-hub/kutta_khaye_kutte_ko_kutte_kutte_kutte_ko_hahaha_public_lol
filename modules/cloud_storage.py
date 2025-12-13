@@ -115,16 +115,18 @@ class HuggingFaceStorage:
             from huggingface_hub import hf_hub_download
             
             # Parse the path
-            # Format: hf://repo_id/path/to/file
+            # Format: hf://repo_id/path/to/file (where repo_id is User/Repo)
             if hf_path.startswith("hf://"):
-                path_parts = hf_path[5:].split("/", 1)
-                if len(path_parts) == 2:
-                    repo_id = path_parts[0]
-                    file_path = path_parts[1]
+                clean_path = hf_path[5:]
+                # We expect User/Repo/Path...
+                parts = clean_path.split("/")
+                if len(parts) >= 3:
+                     repo_id = f"{parts[0]}/{parts[1]}"
+                     file_path = "/".join(parts[2:])
                 else:
-                    # Use default repo
-                    repo_id = self.repo_id
-                    file_path = path_parts[0]
+                     # Fallback if weird format
+                     repo_id = self.repo_id
+                     file_path = clean_path
             else:
                 # Assume it's just the file path in default repo
                 repo_id = self.repo_id
@@ -171,9 +173,14 @@ class HuggingFaceStorage:
         try:
             # Parse the path
             if hf_path.startswith("hf://"):
-                path_parts = hf_path[5:].split("/", 1)
-                repo_id = path_parts[0] if len(path_parts) > 0 else self.repo_id
-                file_path = path_parts[1] if len(path_parts) > 1 else hf_path
+                clean_path = hf_path[5:]
+                parts = clean_path.split("/")
+                if len(parts) >= 3:
+                     repo_id = f"{parts[0]}/{parts[1]}"
+                     file_path = "/".join(parts[2:])
+                else:
+                     repo_id = self.repo_id
+                     file_path = clean_path
             else:
                 repo_id = self.repo_id
                 file_path = hf_path
