@@ -1,6 +1,6 @@
 """
 YouTube Video Downloader - HINDI ONLY VERSION using Cobalt API
-Downloads videos with Hindi dubbed audio using Cobalt (FREE, no cookies needed!)
+Downloads videos with Hindi dubbed audio using self-hosted Cobalt (FREE, no cookies needed!)
 """
 import requests
 import os
@@ -11,48 +11,22 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Cobalt API endpoints (try multiple in case one is down)
-COBALT_APIS = [
-    "https://api.cobalt.tools",
-    "https://cobalt-api.kwiatekmiki.com",
-    "https://cobalt.canine.tools",
-]
+# Get Cobalt API URL from environment variable
+COBALT_API_URL = os.environ.get("COBALT_API_URL", "")
 
 
 class VideoDownloader:
     def __init__(self, download_dir: str = "downloads"):
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
-        self.working_api = None
-    
-    def find_working_api(self) -> Optional[str]:
-        """Find a working Cobalt API endpoint"""
-        if self.working_api:
-            return self.working_api
-            
-        for api in COBALT_APIS:
-            try:
-                # Test the API
-                response = requests.get(api, timeout=10)
-                if response.status_code == 200:
-                    logger.info(f"✅ Found working Cobalt API: {api}")
-                    self.working_api = api
-                    return api
-            except:
-                continue
-        
-        logger.error("❌ No working Cobalt API found")
-        return None
     
     def download_with_cobalt(self, video_url: str, output_path: str) -> bool:
         """
-        Download video using Cobalt API with Hindi audio
+        Download video using self-hosted Cobalt API with Hindi audio
         """
-        api_base = self.find_working_api()
-        if not api_base:
+        if not COBALT_API_URL:
+            logger.error("❌ COBALT_API_URL environment variable not set!")
             return False
-        
-        api_url = f"{api_base}/"
         
         headers = {
             "Accept": "application/json",
@@ -69,8 +43,8 @@ class VideoDownloader:
         }
         
         try:
-            logger.info(f"📡 Requesting from Cobalt API...")
-            response = requests.post(api_url, json=payload, headers=headers, timeout=60)
+            logger.info(f"📡 Requesting from Cobalt API: {COBALT_API_URL}")
+            response = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=120)
             
             if response.status_code != 200:
                 logger.error(f"❌ Cobalt API error: {response.status_code}")
@@ -78,6 +52,7 @@ class VideoDownloader:
                 return False
             
             data = response.json()
+            logger.info(f"📥 Cobalt response status: {data.get('status')}")
             
             # Check response status
             status = data.get("status")
@@ -91,6 +66,7 @@ class VideoDownloader:
                 # Direct download URL
                 download_url = data.get("url")
                 if download_url:
+                    logger.info(f"📥 Got download URL, downloading...")
                     return self.download_file(download_url, output_path)
             
             if status == "picker":
@@ -100,11 +76,13 @@ class VideoDownloader:
                     if item.get("type") == "video":
                         download_url = item.get("url")
                         if download_url:
+                            logger.info(f"📥 Got video from picker, downloading...")
                             return self.download_file(download_url, output_path)
             
             if status == "stream":
                 download_url = data.get("url")
                 if download_url:
+                    logger.info(f"📥 Got stream URL, downloading...")
                     return self.download_file(download_url, output_path)
             
             logger.error(f"❌ Unexpected Cobalt response: {data}")
@@ -120,7 +98,7 @@ class VideoDownloader:
     def download_file(self, url: str, output_path: str) -> bool:
         """Download file from URL with progress"""
         try:
-            logger.info(f"📥 Downloading video...")
+            logger.info(f"📥 Downloading video file...")
             
             response = requests.get(url, stream=True, timeout=600)
             response.raise_for_status()
@@ -142,15 +120,21 @@ class VideoDownloader:
                                 logger.info(f"   Progress: {percent}%")
                                 last_log = percent
             
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000000:  # > 1MB
-                logger.info(f"✅ Download complete: {output_path}")
+            file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+            
+            if file_size > 1000000:  # > 1MB means valid video
+                logger.info(f"✅ Download complete: {output_path} ({file_size // 1024 // 1024} MB)")
                 return True
             else:
-                logger.error("❌ Downloaded file too small or missing")
+                logger.error(f"❌ Downloaded file too small: {file_size} bytes")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
                 return False
                 
         except Exception as e:
             logger.error(f"❌ Download error: {e}")
+            if os.path.exists(output_path):
+                os.remove(output_path)
             return False
     
     def download_video(self, video_url: str, video_id: str, prefer_hindi: bool = True) -> Optional[str]:
