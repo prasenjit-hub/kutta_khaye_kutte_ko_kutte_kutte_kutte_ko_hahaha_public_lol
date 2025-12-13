@@ -24,8 +24,8 @@ class VideoDownloader:
     
     def get_hindi_audio_format(self, video_url: str) -> Optional[str]:
         """
-        Find Hindi audio format ID from video
-        Returns format ID like '251-7' for Hindi audio
+        Find best video quality format ID that includes Hindi audio
+        Returns format ID like '96-11' for 1080p Hindi
         """
         logger.info("🔍 Checking for Hindi audio track...")
         
@@ -47,21 +47,40 @@ class VideoDownloader:
             data = json.loads(result.stdout)
             formats = data.get('formats', [])
             
-            # Find Hindi audio format
-            hindi_audio_id = None
+            # Find all formats with Hindi audio AND Video
+            hindi_formats = []
+            
             for fmt in formats:
                 lang = fmt.get('language') or ''
+                vcodec = fmt.get('vcodec') or 'none'
+                acodec = fmt.get('acodec') or 'none'
+                
+                # Check for Hindi language
                 if lang.lower() in ['hi', 'hin', 'hindi']:
-                    if fmt.get('acodec') != 'none':  # Is audio
-                        hindi_audio_id = fmt.get('format_id')
-                        logger.info(f"✅ Found Hindi audio: format_id={hindi_audio_id}")
-                        break
+                    # Check if it has valid video and audio
+                    if vcodec != 'none' and acodec != 'none':
+                        height = fmt.get('height', 0) or 0
+                        fmt_id = fmt.get('format_id')
+                        hindi_formats.append({'id': fmt_id, 'height': height})
             
-            if not hindi_audio_id:
-                logger.warning("⚠️ No Hindi audio track found in this video")
+            if not hindi_formats:
+                logger.warning("⚠️ No combined Video+Hindi format found. checking audio-only...")
+                # Fallback: Try to find best audio-only Hindi track to merge
+                for fmt in formats:
+                     lang = fmt.get('language') or ''
+                     vcodec = fmt.get('vcodec') or 'none'
+                     if lang.lower() in ['hi', 'hin', 'hindi'] and vcodec == 'none':
+                         return f"bestvideo[height<=1080]+{fmt.get('format_id')}"
                 return None
             
-            return hindi_audio_id
+            # Sort by height (resolution) descending - Best quality first
+            hindi_formats.sort(key=lambda x: x['height'], reverse=True)
+            
+            best_format = hindi_formats[0]['id']
+            best_height = hindi_formats[0]['height']
+            logger.info(f"✅ Found best Hindi video: {best_format} ({best_height}p)")
+            
+            return best_format
             
         except json.JSONDecodeError:
             logger.error("❌ Failed to parse video info")
@@ -73,7 +92,6 @@ class VideoDownloader:
     def download_from_youtube(self, video_url: str, output_path: str) -> bool:
         """
         Download from YouTube with Hindi audio ONLY
-        First checks if Hindi audio exists, then downloads
         """
         logger.info(f"📥 Downloading from YouTube with HINDI audio...")
         
@@ -83,15 +101,15 @@ class VideoDownloader:
         
         logger.info("🍪 Using cookies for authentication")
         
-        # First, find Hindi audio format
-        hindi_format = self.get_hindi_audio_format(video_url)
+        # First, find best Hindi audio/video format
+        format_str = self.get_hindi_audio_format(video_url)
         
-        if not hindi_format:
+        if not format_str:
             logger.warning("⚠️ Hindi audio not available - skipping this video")
             return False
         
-        # Build format string with specific Hindi audio
-        format_str = f'bestvideo[height<=1080][ext=mp4]+{hindi_format}/bestvideo[height<=1080]+{hindi_format}'
+        # If format_str is just an ID (like '96-11'), use it directly
+        # If it's a merge string (like 'bestvideo+140'), use it as is
         
         cmd = [
             'yt-dlp',
@@ -103,8 +121,9 @@ class VideoDownloader:
         ]
         
         try:
-            logger.info(f"📥 Downloading with Hindi audio (format: {hindi_format})...")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            logger.info(f"📥 Downloading format: {format_str}...")
+            # Increased timeout to 30 mins for slow connections
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             
             if result.returncode == 0 and os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
