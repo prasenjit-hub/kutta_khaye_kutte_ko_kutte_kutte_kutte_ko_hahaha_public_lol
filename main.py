@@ -19,6 +19,7 @@ from modules.downloader import VideoDownloader
 from modules.splitter import VideoSplitter
 from modules.editor import VideoEditor
 from modules.youtube_uploader import YouTubeUploader
+from modules.notifier import notify_cookies_needed, notify_all_videos_complete, notify_video_uploaded, notify_error
 
 # Setup logging
 os.makedirs('logs', exist_ok=True)
@@ -158,7 +159,15 @@ class YouTubeShortsAutomation:
         # 2. Find next video to process
         video_id, video_data = self.get_next_video_to_process()
         if not video_id:
-            logger.info("No videos to process!")
+            logger.info("🎉 All videos processed!")
+            logger.info("   No more videos to upload!")
+            
+            # Send notification
+            try:
+                notify_all_videos_complete()
+            except:
+                pass
+            
             return
         
         logger.info(f"\n📹 Processing: {video_data['title']}")
@@ -199,11 +208,18 @@ class YouTubeShortsAutomation:
                     video_path = None
             
             if not video_path or not os.path.exists(video_path):
-                logger.warning("⚠️ Could not download video. Marking as skipped...")
-                self.tracking['videos'][video_id]['status'] = 'skipped_no_hindi'
+                logger.warning("⚠️ Could not download video - no cloud URL available!")
+                logger.warning("   Please run batch_download.py locally to upload videos to cloud")
+                
+                # Send Telegram notification
+                try:
+                    notify_cookies_needed()
+                except:
+                    pass
+                
+                self.tracking['videos'][video_id]['status'] = 'needs_cloud_upload'
                 self._save_tracking()
-                # Try next video
-                return self.run_full_automation()
+                return  # Stop processing, wait for cloud upload
         else:
             logger.info(f"✓ Video already downloaded: {video_path}")
         
