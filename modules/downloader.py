@@ -1,177 +1,138 @@
 """
-YouTube Video Downloader - HINDI ONLY VERSION using Cobalt API
-Downloads videos with Hindi dubbed audio using self-hosted Cobalt (FREE, no cookies needed!)
+YouTube Video Downloader - HINDI ONLY VERSION
+Downloads videos in 1080p with ONLY Hindi audio using yt-dlp
+Automatically generates cookies using Playwright if needed
 """
-import requests
+import yt_dlp
 import os
 import logging
-import time
+import subprocess
 from typing import Optional
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Get Cobalt API URL from environment variable
-COBALT_API_URL = os.environ.get("COBALT_API_URL", "")
 
 
 class VideoDownloader:
     def __init__(self, download_dir: str = "downloads"):
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
+        self.cookies_generated = False
     
-    def download_with_cobalt(self, video_url: str, output_path: str) -> bool:
-        """
-        Download video using self-hosted Cobalt API with Hindi audio
-        """
-        if not COBALT_API_URL:
-            logger.error("❌ COBALT_API_URL environment variable not set!")
-            return False
+    def ensure_cookies(self):
+        """Generate cookies if not present or if they might be stale"""
+        cookie_file = "youtube_cookies.txt"
         
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
+        # Check if cookies file exists and is recent (less than 6 hours old)
+        if os.path.exists(cookie_file):
+            import time
+            file_age = time.time() - os.path.getmtime(cookie_file)
+            if file_age < 6 * 3600:  # 6 hours
+                logger.info("🍪 Using existing cookies (less than 6 hours old)")
+                return True
         
-        # Request body with Hindi audio preference
-        payload = {
-            "url": video_url,
-            "videoQuality": "1080",
-            "youtubeDubLang": "hi",  # Hindi dubbed audio!
-            "youtubeVideoCodec": "h264",
-            "filenameStyle": "basic",
-        }
-        
+        # Generate new cookies
+        logger.info("🔄 Generating fresh cookies...")
         try:
-            logger.info(f"📡 Requesting from Cobalt API: {COBALT_API_URL}")
-            response = requests.post(COBALT_API_URL, json=payload, headers=headers, timeout=120)
-            
-            if response.status_code != 200:
-                logger.error(f"❌ Cobalt API error: {response.status_code}")
-                logger.error(f"   Response: {response.text[:500]}")
-                return False
-            
-            data = response.json()
-            logger.info(f"📥 Cobalt response status: {data.get('status')}")
-            
-            # Check response status
-            status = data.get("status")
-            
-            if status == "error":
-                error_code = data.get("error", {}).get("code", "unknown")
-                logger.error(f"❌ Cobalt error: {error_code}")
-                return False
-            
-            if status == "redirect" or status == "tunnel":
-                # Direct download URL
-                download_url = data.get("url")
-                if download_url:
-                    logger.info(f"📥 Got download URL, downloading...")
-                    return self.download_file(download_url, output_path)
-            
-            if status == "picker":
-                # Multiple options available, pick the video
-                picker = data.get("picker", [])
-                for item in picker:
-                    if item.get("type") == "video":
-                        download_url = item.get("url")
-                        if download_url:
-                            logger.info(f"📥 Got video from picker, downloading...")
-                            return self.download_file(download_url, output_path)
-            
-            if status == "stream":
-                download_url = data.get("url")
-                if download_url:
-                    logger.info(f"📥 Got stream URL, downloading...")
-                    return self.download_file(download_url, output_path)
-            
-            logger.error(f"❌ Unexpected Cobalt response: {data}")
-            return False
-            
-        except requests.exceptions.Timeout:
-            logger.error("❌ Cobalt API timeout")
-            return False
-        except Exception as e:
-            logger.error(f"❌ Cobalt API error: {e}")
-            return False
-    
-    def download_file(self, url: str, output_path: str) -> bool:
-        """Download file from URL with progress"""
-        try:
-            logger.info(f"📥 Downloading video file...")
-            
-            response = requests.get(url, stream=True, timeout=600)
-            response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            last_log = 0
-            
-            with open(output_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        # Log progress every 10%
-                        if total_size > 0:
-                            percent = int(downloaded * 100 / total_size)
-                            if percent >= last_log + 10:
-                                logger.info(f"   Progress: {percent}%")
-                                last_log = percent
-            
-            file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-            
-            if file_size > 1000000:  # > 1MB means valid video
-                logger.info(f"✅ Download complete: {output_path} ({file_size // 1024 // 1024} MB)")
+            from modules.cookie_generator import run_cookie_generator
+            success = run_cookie_generator()
+            if success:
+                logger.info("✅ Fresh cookies generated!")
+                self.cookies_generated = True
                 return True
             else:
-                logger.error(f"❌ Downloaded file too small: {file_size} bytes")
-                if os.path.exists(output_path):
-                    os.remove(output_path)
+                logger.error("❌ Cookie generation failed")
                 return False
-                
         except Exception as e:
-            logger.error(f"❌ Download error: {e}")
-            if os.path.exists(output_path):
-                os.remove(output_path)
+            logger.error(f"❌ Cookie generator error: {e}")
             return False
     
     def download_video(self, video_url: str, video_id: str, prefer_hindi: bool = True) -> Optional[str]:
         """
-        Download video with Hindi audio using Cobalt API
+        Download video in 1080p with ONLY Hindi audio
         
         Args:
             video_url: YouTube video URL
             video_id: Video ID for filename
-            prefer_hindi: Always True for this version
+            prefer_hindi: Must be True for this Hindi-only version
         
         Returns:
-            Path to downloaded file or None if failed
+            Path to downloaded file or None if Hindi audio not available
         """
         output_path = os.path.join(self.download_dir, f"{video_id}.mp4")
         
         # Check if already downloaded
         if os.path.exists(output_path):
             file_size = os.path.getsize(output_path)
-            if file_size > 1000000:  # > 1MB means valid
-                logger.info(f"✓ Video already downloaded: {output_path}")
+            if file_size > 1000000:  # > 1MB
+                logger.info(f"Video already downloaded: {output_path}")
                 return output_path
             else:
-                # Incomplete download, remove and retry
-                os.remove(output_path)
+                os.remove(output_path)  # Remove incomplete file
         
-        logger.info(f"🔍 Downloading with Hindi audio...")
-        logger.info(f"📹 Video: {video_url}")
-        
-        # Try Cobalt API
-        success = self.download_with_cobalt(video_url, output_path)
-        
-        if success and os.path.exists(output_path):
-            return output_path
-        else:
-            logger.warning(f"⚠️ Could not download video with Hindi audio")
+        # Ensure we have valid cookies
+        if not self.ensure_cookies():
+            logger.error("❌ Cannot proceed without valid cookies")
             return None
+        
+        logger.info(f"🔍 Checking for Hindi audio availability...")
+        logger.info(f"📥 Downloading video with HINDI audio only: {video_url}")
+        
+        # yt-dlp options for Hindi audio
+        ydl_opts = {
+            'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[language=hi]/bestvideo[height<=1080]+bestaudio[language=hi]',
+            'outtmpl': output_path,
+            'merge_output_format': 'mp4',
+            'cookiefile': 'youtube_cookies.txt',
+            'quiet': False,
+            'no_warnings': False,
+            'logger': logger,
+            'progress_hooks': [self._progress_hook],
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([video_url])
+            
+            if os.path.exists(output_path):
+                logger.info(f"✅ Successfully downloaded with HINDI audio!")
+                logger.info(f"✅ Download complete (Hindi): {output_path}")
+                return output_path
+            else:
+                logger.error("❌ Download failed - file not found")
+                return None
+                
+        except yt_dlp.utils.DownloadError as e:
+            error_msg = str(e).lower()
+            
+            if 'requested format is not available' in error_msg:
+                logger.warning(f"⚠️ Hindi audio NOT AVAILABLE for this video. Skipping...")
+            elif 'sign in to confirm' in error_msg or 'cookies' in error_msg:
+                logger.error("❌ Authentication failed - cookies may be invalid")
+                # Try regenerating cookies
+                if not self.cookies_generated:
+                    logger.info("🔄 Attempting to regenerate cookies...")
+                    if self.ensure_cookies():
+                        # Retry download
+                        return self.download_video(video_url, video_id, prefer_hindi)
+            else:
+                logger.error(f"❌ Download error: {e}")
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error downloading video: {e}")
+            return None
+    
+    def _progress_hook(self, d):
+        """Progress callback for download status"""
+        if d['status'] == 'downloading':
+            percent = d.get('_percent_str', 'N/A')
+            speed = d.get('_speed_str', 'N/A')
+            eta = d.get('_eta_str', 'N/A')
+            logger.info(f"Downloading: {percent} at {speed} ETA: {eta}")
+        elif d['status'] == 'finished':
+            logger.info("Download finished, now merging...")
 
 
 if __name__ == "__main__":
@@ -183,6 +144,6 @@ if __name__ == "__main__":
     result = downloader.download_video(test_url, "test_hindi_video")
     
     if result:
-        print(f"\n✅ Downloaded successfully to: {result}")
+        print(f"\n✅ Downloaded successfully (Hindi audio) to: {result}")
     else:
-        print("\n❌ Download failed")
+        print("\n❌ Download failed - Hindi audio not available")

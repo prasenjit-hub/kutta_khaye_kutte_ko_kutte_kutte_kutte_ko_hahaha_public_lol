@@ -33,6 +33,9 @@ jobs:
       run: |
         pip install --upgrade pip
         pip install -r requirements.txt
+        pip install playwright
+        playwright install chromium
+        playwright install-deps
     
     - name: 🔐 Setup YouTube Credentials
       run: |
@@ -44,7 +47,8 @@ jobs:
         python main.py --full
       env:
         PYTHONUNBUFFERED: 1
-        COBALT_API_URL: ${{ secrets.COBALT_API_URL }}
+        GOOGLE_EMAIL: ${{ secrets.GOOGLE_EMAIL }}
+        GOOGLE_PASSWORD: ${{ secrets.GOOGLE_PASSWORD }}
     
     - name: 💾 Commit Progress
       run: |
