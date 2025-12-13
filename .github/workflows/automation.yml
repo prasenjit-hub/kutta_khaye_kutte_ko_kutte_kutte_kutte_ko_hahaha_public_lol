@@ -4,7 +4,7 @@ on:
   # Schedule: 4 PM IST (10:30 UTC) and 10 PM IST (16:30 UTC)
   schedule:
     - cron: '30 10 * * *'   # 4 PM IST
-    - cron: '30 16 * * *'   # 10 PM IST  
+    - cron: '30 16 * * *'   # 10 PM IST
   
   # Manual trigger
   workflow_dispatch:
@@ -22,17 +22,12 @@ jobs:
     - name: 🐍 Setup Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.11'
     
     - name: 📦 Install FFmpeg
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg
-    
-    - name: 🦕 Install Deno (for yt-dlp YouTube extraction)
-      run: |
-        curl -fsSL https://deno.land/install.sh | sh
-        echo "$HOME/.deno/bin" >> $GITHUB_PATH
     
     - name: 📚 Install Dependencies
       run: |
@@ -43,9 +38,6 @@ jobs:
       run: |
         echo "${{ secrets.YOUTUBE_CREDENTIALS }}" | base64 -d > youtube_credentials.json
         echo "${{ secrets.YOUTUBE_TOKEN }}" | base64 -d > youtube_token.pickle
-        if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
-          echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > youtube_cookies.txt
-        fi
     
     - name: 🚀 Run Automation
       run: |

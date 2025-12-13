@@ -1,107 +1,197 @@
 """
-YouTube Video Downloader - HINDI ONLY VERSION
-Downloads videos in 1080p with ONLY Hindi audio using yt-dlp
-Uses --remote-components for proper YouTube extraction on servers
+YouTube Video Downloader - HINDI ONLY VERSION using Cobalt API
+Downloads videos with Hindi dubbed audio using Cobalt (FREE, no cookies needed!)
 """
-import yt_dlp
+import requests
 import os
 import logging
-import subprocess
+import time
 from typing import Optional
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Cobalt API endpoints (try multiple in case one is down)
+COBALT_APIS = [
+    "https://api.cobalt.tools",
+    "https://cobalt-api.kwiatekmiki.com",
+    "https://cobalt.canine.tools",
+]
 
 
 class VideoDownloader:
     def __init__(self, download_dir: str = "downloads"):
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
+        self.working_api = None
+    
+    def find_working_api(self) -> Optional[str]:
+        """Find a working Cobalt API endpoint"""
+        if self.working_api:
+            return self.working_api
+            
+        for api in COBALT_APIS:
+            try:
+                # Test the API
+                response = requests.get(api, timeout=10)
+                if response.status_code == 200:
+                    logger.info(f"✅ Found working Cobalt API: {api}")
+                    self.working_api = api
+                    return api
+            except:
+                continue
+        
+        logger.error("❌ No working Cobalt API found")
+        return None
+    
+    def download_with_cobalt(self, video_url: str, output_path: str) -> bool:
+        """
+        Download video using Cobalt API with Hindi audio
+        """
+        api_base = self.find_working_api()
+        if not api_base:
+            return False
+        
+        api_url = f"{api_base}/"
+        
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        
+        # Request body with Hindi audio preference
+        payload = {
+            "url": video_url,
+            "videoQuality": "1080",
+            "youtubeDubLang": "hi",  # Hindi dubbed audio!
+            "youtubeVideoCodec": "h264",
+            "filenameStyle": "basic",
+        }
+        
+        try:
+            logger.info(f"📡 Requesting from Cobalt API...")
+            response = requests.post(api_url, json=payload, headers=headers, timeout=60)
+            
+            if response.status_code != 200:
+                logger.error(f"❌ Cobalt API error: {response.status_code}")
+                logger.error(f"   Response: {response.text[:500]}")
+                return False
+            
+            data = response.json()
+            
+            # Check response status
+            status = data.get("status")
+            
+            if status == "error":
+                error_code = data.get("error", {}).get("code", "unknown")
+                logger.error(f"❌ Cobalt error: {error_code}")
+                return False
+            
+            if status == "redirect" or status == "tunnel":
+                # Direct download URL
+                download_url = data.get("url")
+                if download_url:
+                    return self.download_file(download_url, output_path)
+            
+            if status == "picker":
+                # Multiple options available, pick the video
+                picker = data.get("picker", [])
+                for item in picker:
+                    if item.get("type") == "video":
+                        download_url = item.get("url")
+                        if download_url:
+                            return self.download_file(download_url, output_path)
+            
+            if status == "stream":
+                download_url = data.get("url")
+                if download_url:
+                    return self.download_file(download_url, output_path)
+            
+            logger.error(f"❌ Unexpected Cobalt response: {data}")
+            return False
+            
+        except requests.exceptions.Timeout:
+            logger.error("❌ Cobalt API timeout")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Cobalt API error: {e}")
+            return False
+    
+    def download_file(self, url: str, output_path: str) -> bool:
+        """Download file from URL with progress"""
+        try:
+            logger.info(f"📥 Downloading video...")
+            
+            response = requests.get(url, stream=True, timeout=600)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            last_log = 0
+            
+            with open(output_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        
+                        # Log progress every 10%
+                        if total_size > 0:
+                            percent = int(downloaded * 100 / total_size)
+                            if percent >= last_log + 10:
+                                logger.info(f"   Progress: {percent}%")
+                                last_log = percent
+            
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000000:  # > 1MB
+                logger.info(f"✅ Download complete: {output_path}")
+                return True
+            else:
+                logger.error("❌ Downloaded file too small or missing")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Download error: {e}")
+            return False
     
     def download_video(self, video_url: str, video_id: str, prefer_hindi: bool = True) -> Optional[str]:
         """
-        Download video in 1080p with ONLY Hindi audio
-        Uses yt-dlp command line with --remote-components for proper extraction
+        Download video with Hindi audio using Cobalt API
         
         Args:
             video_url: YouTube video URL
             video_id: Video ID for filename
-            prefer_hindi: Must be True for this Hindi-only version
+            prefer_hindi: Always True for this version
         
         Returns:
-            Path to downloaded file or None if Hindi audio not available
+            Path to downloaded file or None if failed
         """
         output_path = os.path.join(self.download_dir, f"{video_id}.mp4")
         
         # Check if already downloaded
         if os.path.exists(output_path):
-            logger.info(f"Video already downloaded: {output_path}")
-            return output_path
-        
-        logger.info(f"🔍 Checking for Hindi audio availability...")
-        logger.info(f"📥 Downloading video with HINDI audio only: {video_url}")
-        
-        # Build yt-dlp command
-        # Using command line instead of Python API for better --remote-components support
-        cmd = [
-            'yt-dlp',
-            '--remote-components', 'ejs:github',  # Enable JS challenge solving
-            '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[language=hi]/bestvideo[height<=1080]+bestaudio[language=hi]',
-            '--merge-output-format', 'mp4',
-            '-o', output_path,
-            '--no-warnings',
-        ]
-        
-        # Add cookies if available
-        if os.path.exists('youtube_cookies.txt'):
-            logger.info("🍪 Using YouTube cookies for authentication")
-            cmd.extend(['--cookies', 'youtube_cookies.txt'])
-        else:
-            logger.info("ℹ️ No cookies file found")
-        
-        cmd.append(video_url)
-        
-        try:
-            logger.info(f"Running: {' '.join(cmd[:5])}...")  # Log partial command
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 minute timeout
-            )
-            
-            if result.returncode == 0:
-                if os.path.exists(output_path):
-                    logger.info(f"✅ Download complete (Hindi): {output_path}")
-                    return output_path
-                else:
-                    logger.error("❌ Download seemed successful but file not found")
-                    return None
+            file_size = os.path.getsize(output_path)
+            if file_size > 1000000:  # > 1MB means valid
+                logger.info(f"✓ Video already downloaded: {output_path}")
+                return output_path
             else:
-                stderr = result.stderr.lower()
-                
-                # Check if it's a "format not available" error (no Hindi)
-                if 'requested format is not available' in stderr or 'no video formats found' in stderr:
-                    logger.warning(f"⚠️ Hindi audio NOT AVAILABLE for this video. Skipping...")
-                    return None
-                elif 'sign in to confirm' in stderr:
-                    logger.error("❌ Cookies invalid or expired. Please refresh cookies.")
-                    return None
-                else:
-                    logger.error(f"❌ Download failed: {result.stderr[:500]}")
-                    return None
-                    
-        except subprocess.TimeoutExpired:
-            logger.error("❌ Download timed out (10 minutes)")
-            return None
-        except Exception as e:
-            logger.error(f"❌ Error downloading video: {e}")
+                # Incomplete download, remove and retry
+                os.remove(output_path)
+        
+        logger.info(f"🔍 Downloading with Hindi audio...")
+        logger.info(f"📹 Video: {video_url}")
+        
+        # Try Cobalt API
+        success = self.download_with_cobalt(video_url, output_path)
+        
+        if success and os.path.exists(output_path):
+            return output_path
+        else:
+            logger.warning(f"⚠️ Could not download video with Hindi audio")
             return None
 
 
 if __name__ == "__main__":
-    # Test downloader - Hindi only
+    # Test downloader
     downloader = VideoDownloader()
     
     # Test with a MrBeast video
@@ -109,6 +199,6 @@ if __name__ == "__main__":
     result = downloader.download_video(test_url, "test_hindi_video")
     
     if result:
-        print(f"\n✅ Downloaded successfully (Hindi audio) to: {result}")
+        print(f"\n✅ Downloaded successfully to: {result}")
     else:
-        print("\n❌ Download failed - Hindi audio not available or error occurred")
+        print("\n❌ Download failed")
