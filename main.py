@@ -197,7 +197,9 @@ class YouTubeShortsAutomation:
                         except:
                             pass
                 else:
-                     logger.warning(f"⚠️ Failed to sync {video_id}. Will retry next run.")
+                     logger.error(f"❌ Failed to sync {video_id}. Marking as failed to skip next time.")
+                     self.tracking['videos'][video_id]['status'] = 'download_failed'
+                     self._save_tracking()
 
         logger.info("\n✅ Phase 1 Complete.")
         
