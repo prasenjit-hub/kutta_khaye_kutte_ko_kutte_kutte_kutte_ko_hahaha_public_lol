@@ -305,8 +305,8 @@ class VideoEditor:
         
         # 2. Add Reaction (if present)
         if has_reaction:
-            # Reaction size: 15% of width (roughly)
-            react_w = int(out_w * 0.15)
+            # Reaction size: 28% of width
+            react_w = int(out_w * 0.28)
             padding = 20
             
             # Process Reaction: [2:v] -> Crop Square -> Scale
