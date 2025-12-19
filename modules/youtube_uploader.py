@@ -35,9 +35,21 @@ class YouTubeUploader:
         
         # Load saved token if exists
         if os.path.exists(self.token_file):
-            logger.info("Loading saved YouTube credentials...")
+            logger.info("Loading saved YouTube credentials from file...")
             with open(self.token_file, 'rb') as token:
                 creds = pickle.load(token)
+        elif os.environ.get('YOUTUBE_TOKEN_BASE64'):
+            logger.info("Loading YouTube credentials from environment secret...")
+            import base64
+            try:
+                token_data = base64.b64decode(os.environ['YOUTUBE_TOKEN_BASE64'])
+                creds = pickle.loads(token_data)
+                # optionally save to file for local reuse
+                with open(self.token_file, 'wb') as token:
+                     pickle.dump(creds, token)
+            except Exception as e:
+                logger.error(f"Failed to decode env token: {e}")
+
         
         # If no valid credentials, authenticate
         if not creds or not creds.valid:
