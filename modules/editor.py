@@ -12,6 +12,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+
+import random
+
 def get_video_info(video_path: str) -> dict:
     """Get video dimensions and duration using ffprobe"""
     try:
@@ -50,6 +53,74 @@ class VideoEditor:
         self.config = config
         self.overlay_settings = config.get('overlay_settings', {})
         self.video_settings = config.get('video_settings', {})
+        self.reaction_dir = os.path.join(os.getcwd(), 'assets', 'reactions')
+
+    def _create_reaction_track(self, target_duration: float) -> str:
+        """
+        Create a reaction video track by concatenating random clips
+        from assets/reactions to match target_duration.
+        Returns path to created temp file or None.
+        """
+        if not os.path.exists(self.reaction_dir):
+            return None
+            
+        clips = [
+            os.path.join(self.reaction_dir, f) 
+            for f in os.listdir(self.reaction_dir) 
+            if f.lower().endswith(('.mp4', '.mov', '.webm'))
+        ]
+        
+        if not clips:
+            return None
+            
+        # Select random clips to fill duration
+        selected_clips = []
+        current_duration = 0
+        
+        # Loop until we have enough footage (plus a bit extra buffer)
+        while current_duration < target_duration + 5:
+            clip = random.choice(clips)
+            selected_clips.append(clip)
+            # Estimate clip duration (assume ~7s as user said, or check real)
+            # Check real duration for accuracy
+            info = get_video_info(clip)
+            current_duration += info['duration']
+            
+        # Create concat list file
+        concat_list_path = 'temp_concat_list.txt'
+        with open(concat_list_path, 'w', encoding='utf-8') as f:
+            for clip in selected_clips:
+                # Escape paths for FFmpeg
+                formatted_path = clip.replace('\\', '/').replace("'", "'\\''")
+                f.write(f"file '{formatted_path}'\n")
+        
+        output_path = 'temp_reaction_track.mp4'
+        
+        try:
+            # Concatenate
+            cmd = [
+                'ffmpeg', '-y',
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', concat_list_path,
+                '-t', str(target_duration),
+                '-c:v', 'libx264',
+                '-an', # No audio from reaction
+                '-preset', 'ultrafast',
+                output_path
+            ]
+            
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            os.remove(concat_list_path)
+            
+            if os.path.exists(output_path):
+                return output_path
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error creating reaction track: {e}")
+            return None
+
     
     def _create_text_overlay(self, text: str, width: int, height: int = 200) -> str:
         """Create a text overlay image using PIL"""
@@ -106,12 +177,13 @@ class VideoEditor:
     
     def add_overlays(self, video_path: str, part_number: int, title: str, output_path: str = None) -> str:
         """
-        Add text overlays to video and convert to YouTube Shorts format (9:16)
-        For landscape videos: Adds blur background (not crop/zoom) to keep full content visible
+        Add text overlays + REACTION VIDEO and convert to YouTube Shorts format (9:16)
         """
         if output_path is None:
             base, ext = os.path.splitext(video_path)
             output_path = f"{base}_edited{ext}"
+        
+        reaction_track = None
         
         try:
             logger.info(f"Adding overlays to: {video_path}")
@@ -125,6 +197,13 @@ class VideoEditor:
             video_info = get_video_info(video_path)
             input_width = video_info['width']
             input_height = video_info['height']
+            duration = video_info['duration']
+            
+            # Generate Reaction Track
+            reaction_track = self._create_reaction_track(duration)
+            has_reaction = reaction_track is not None
+            if has_reaction:
+                logger.info("✓ Reaction track generated for overlay")
             
             logger.info(f"Input video: {input_width}x{input_height}")
             
@@ -135,18 +214,24 @@ class VideoEditor:
             part_text = self.overlay_settings.get('part_text_format', 'Part {n}').format(n=part_number)
             overlay_path = self._create_text_overlay(part_text, target_width)
             
-            # Build FFmpeg filter for 9:16 conversion
-            # For landscape videos: Use blur background padding (like old editor)
+            # Build FFmpeg filter
             filter_complex = self._build_filter_with_blur_background(
                 input_width, input_height,
-                target_width, target_height
+                target_width, target_height,
+                has_reaction
             )
             
             # FFmpeg command
             cmd = [
                 'ffmpeg', '-y',
-                '-i', video_path,  # Input video
-                '-i', overlay_path,  # Overlay image
+                '-i', video_path,  # [0:v] Input video
+                '-i', overlay_path       # [1:v] Text Overlay
+            ]
+            
+            if has_reaction:
+                cmd.extend(['-i', reaction_track]) # [2:v] Reaction Video
+                
+            cmd.extend([
                 '-filter_complex', filter_complex,
                 '-map', '[outv]',
                 '-map', '0:a?',  # Keep audio if exists
@@ -155,18 +240,20 @@ class VideoEditor:
                 '-crf', '23',
                 '-c:a', 'aac',
                 '-b:a', '256k',
-                '-r', '30',  # 30 fps
+                '-r', '30',
                 '-movflags', '+faststart',
                 '-loglevel', 'error',
                 output_path
-            ]
+            ])
             
             logger.info(f"Writing edited video to: {output_path}")
             result = subprocess.run(cmd, capture_output=True, text=True)
             
-            # Cleanup temp overlay
+            # Cleanup
             if os.path.exists(overlay_path):
                 os.remove(overlay_path)
+            if reaction_track and os.path.exists(reaction_track):
+                os.remove(reaction_track)
             
             if result.returncode != 0:
                 logger.error(f"FFmpeg error: {result.stderr}")
@@ -182,72 +269,64 @@ class VideoEditor:
                 
         except Exception as e:
             logger.error(f"Error adding overlays: {e}")
+            # Ensure cleanup on crash
+            if reaction_track and os.path.exists(reaction_track):
+                try: 
+                    os.remove(reaction_track) 
+                except: 
+                    pass
             import traceback
             traceback.print_exc()
             return None
     
-    def _build_filter_with_blur_background(self, in_w: int, in_h: int, out_w: int, out_h: int) -> str:
+    def _build_filter_with_blur_background(self, in_w: int, in_h: int, out_w: int, out_h: int, has_reaction: bool = False) -> str:
         """
         Build FFmpeg filter complex for 9:16 conversion with BLUR BACKGROUND
-        
-        For landscape videos:
-        1. Create a blurred, darkened copy as background
-        2. Resize original to fit width
-        3. Center original on blurred background
-        4. Add text overlay on top
-        
-        This keeps ALL content visible without zooming/cropping!
+        Optional: Adds Reaction Video at Bottom Left
         """
-        target_aspect = out_w / out_h  # 9:16 = 0.5625
+        target_aspect = out_w / out_h
         current_aspect = in_w / in_h
         
+        # 1. Prepare Main Video (Background + Foreground)
         if current_aspect > target_aspect:
             # LANDSCAPE video - needs blur background padding
-            # 
-            # Filter explanation:
-            # [0:v] - Input video
-            # split - Make 2 copies
-            # [bg] - Background copy: scale to fill, blur heavily, darken
-            # [fg] - Foreground copy: scale to fit width, center vertically
-            # overlay - Put foreground on background
-            # [1:v] overlay - Add text overlay on top
-            
-            filter_complex = (
-                # Split input into background and foreground
+            main_filter = (
                 "[0:v]split=2[bg_in][fg_in];"
-                
-                # Background: scale to fill 9:16, blur heavily, darken
-                f"[bg_in]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
-                f"crop={out_w}:{out_h},"
-                "gblur=sigma=18,"  # Moderate blur (not too heavy)
-                "eq=brightness=-0.3:saturation=0.5"  # Darken and desaturate
-                "[bg];"
-                
-                # Foreground: scale to fit width, keep aspect ratio
+                f"[bg_in]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,crop={out_w}:{out_h},gblur=sigma=18,eq=brightness=-0.3:saturation=0.5[bg];"
                 f"[fg_in]scale={out_w}:-2[fg_scaled];"
-                
-                # Overlay foreground centered on background
-                "[bg][fg_scaled]overlay=(W-w)/2:(H-h)/2[video_out];"
-                
-                # Add text overlay on top
-                "[video_out][1:v]overlay=(W-w)/2:0[outv]"
+                "[bg][fg_scaled]overlay=(W-w)/2:(H-h)/2[main_out]"
             )
         else:
-            # PORTRAIT or SQUARE video - simple scale and pad/crop
+            # PORTRAIT/SQUARE
             if current_aspect < target_aspect:
-                # Taller than target - scale to width, crop height
-                filter_complex = (
-                    f"[0:v]scale={out_w}:-2,crop={out_w}:{out_h}[scaled];"
-                    "[scaled][1:v]overlay=(W-w)/2:0[outv]"
-                )
+                main_filter = f"[0:v]scale={out_w}:-2,crop={out_w}:{out_h}[main_out]"
             else:
-                # Already correct aspect - just resize
-                filter_complex = (
-                    f"[0:v]scale={out_w}:{out_h}[scaled];"
-                    "[scaled][1:v]overlay=(W-w)/2:0[outv]"
-                )
+                main_filter = f"[0:v]scale={out_w}:{out_h}[main_out]"
         
-        return filter_complex
+        # 2. Add Reaction (if present)
+        if has_reaction:
+            # Reaction size: 15% of width (roughly)
+            react_w = int(out_w * 0.15)
+            padding = 20
+            
+            # Process Reaction: [2:v] -> Crop Square -> Scale
+            reaction_filter = (
+                f";[2:v]crop='min(iw,ih)':'min(iw,ih)',scale={react_w}:{react_w}[react_out];"
+                f"[main_out][react_out]overlay={padding}:H-h-{padding}[video_with_react]"
+            )
+            final_overlay_input = "[video_with_react]"
+        else:
+            reaction_filter = ""
+            final_overlay_input = "[main_out]"
+            
+        # 3. Add Text Overlay
+        final_filter = (
+            f"{main_filter}{reaction_filter};"
+            f"{final_overlay_input}[1:v]overlay=(W-w)/2:0[outv]"
+        )
+        
+        return final_filter
+
     
     def _truncate_title(self, title: str, max_length: int = 40) -> str:
         if len(title) <= max_length:
