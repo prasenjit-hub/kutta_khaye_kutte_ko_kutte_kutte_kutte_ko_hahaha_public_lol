@@ -80,14 +80,17 @@ Sab video parts YouTube Shorts pe upload ho gaye!
     return send_telegram_message(message)
 
 
-def notify_video_uploaded(video_title: str, part_num: int, total_parts: int):
+def notify_video_uploaded(video_title: str, part_num: int, total_parts: int, video_url: str = None):
     """Send notification when a part is uploaded"""
     complete_emoji = "🎉 Video complete!" if part_num == total_parts else f"⏳ {total_parts - part_num} parts remaining"
+    
+    url_line = f"\n🔗 <a href='{video_url}'>Watch on YouTube</a>" if video_url else ""
     
     message = f"""✅ <b>Part Uploaded!</b>
 
 📹 <b>{video_title[:50]}</b>
 📊 Part {part_num}/{total_parts}
+{url_line}
 
 {complete_emoji}"""
     

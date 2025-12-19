@@ -400,7 +400,8 @@ class YouTubeShortsAutomation:
                     self._save_tracking()
                     
                     try:
-                        notify_video_uploaded(final_title, part_num, total_parts)
+                        video_url = f"https://youtube.com/shorts/{yt_id}"
+                        notify_video_uploaded(final_title, part_num, total_parts, video_url=video_url)
                     except:
                         pass
                 else:
