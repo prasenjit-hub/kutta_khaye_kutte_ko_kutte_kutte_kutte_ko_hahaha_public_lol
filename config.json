@@ -4,7 +4,7 @@
   "min_video_date": "2019-03-15",
   "youtube_upload": {
     "credentials_file": "youtube_credentials.json",
-    "title_template": "{title} - Part {part} #shorts #viral #mrbeast",
+    "title_template": "{title} - Part {part} #shorts #viral #trending",
     "description_template": "🎬 {title}\n\n📌 This is Part {part} of {total}\n\n🔥 Watch the full series for the complete experience!\n\n✨ Original Video: {url}\n\n---\n\n💯 Follow for more amazing content!\n\n👍 Like, Share & Subscribe for daily updates!\n\n#shorts #youtubeshorts #viral #trending #mrbeast #entertainment #epic #amazing #mustwatch #fyp #foryou #viralshorts #trendingshorts",
     "tags": [
       "no. 1 shorts",
