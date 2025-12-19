@@ -65,6 +65,19 @@ class YouTubeUploader:
         self.youtube = build('youtube', 'v3', credentials=creds)
         logger.info("✓ YouTube API authenticated successfully")
     
+    def is_daily_limit_reached(self) -> bool:
+        """
+        Check if daily upload limit has been reached.
+        For now, this is a placeholder. A robust implementation would 
+        check for `quotaExceeded` errors in previous attempts.
+        """
+        return False
+
+    def upload_video(self, *args, **kwargs):
+        """Alias for upload_short"""
+        return self.upload_short(*args, **kwargs)
+
+    
     def upload_short(
         self,
         video_path: str,
