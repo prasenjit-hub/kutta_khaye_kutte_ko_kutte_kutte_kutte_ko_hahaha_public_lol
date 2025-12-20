@@ -409,44 +409,44 @@ class YouTubeShortsAutomation:
             except Exception as e:
                 logger.error(f"Upload Error: {e}")
             
-            # --- INSTAGRAM UPLOAD ---
+            # --- SOCIAL MEDIAS UPLOAD (IG & FB) ---
             ig_token = os.environ.get("IG_ACCESS_TOKEN")
             ig_account = os.environ.get("IG_ACCOUNT_ID")
+            fb_page_id = os.environ.get("FB_PAGE_ID")
             
-            if ig_token and ig_account:
+            if ig_token and (ig_account or fb_page_id):
                 try:
-                    logger.info("\n📸 Instagram Upload Initiated...")
+                    logger.info("\n📸 Social Media Upload Initiated (IG/FB)...")
                     
                     # 1. Upload to Temp Cloud (HF) to get public URL
-                    # We use a temp ID to distinguish from main storage
-                    temp_id = f"temp_ig_{video_id}_{part_num}"
+                    temp_id = f"temp_social_{video_id}_{part_num}"
                     
-                    # Uses invalidates cache by default? 
-                    # upload_to_cloud returns hf://...
                     hf_url = self.downloader.upload_to_cloud(edited_path, temp_id)
                     
                     if hf_url:
-                        # Convert hf:// to https:// public URL
-                        # Format: hf://User/Repo/videos/temp...mp4
-                        # Target: https://huggingface.co/datasets/User/Repo/resolve/main/videos/temp...mp4
-                        
+                        # Convert hf:// to https://
                         clean_path = hf_url.replace("hf://", "")
-                        # Split at first slash? No, repo is User/Repo
                         parts = clean_path.split("/")
                         if len(parts) >= 3:
                             repo_part = f"{parts[0]}/{parts[1]}"
                             file_part = "/".join(parts[2:])
                             public_url = f"https://huggingface.co/datasets/{repo_part}/resolve/main/{file_part}"
                             
-                            logger.info(f"   Public URL generated: {public_url}")
+                            logger.info(f"   Public URL: {public_url}")
                             
-                            from modules.instagram_graph_api import InstagramGraphUploader
-                            ig_uploader = InstagramGraphUploader(ig_token, ig_account)
+                            from modules.instagram_graph_api import MetaGraphUploader
+                            uploader = MetaGraphUploader(ig_token)
                             
-                            ig_caption = f"{final_title}\n\n{description}"
-                            if len(ig_caption) > 2100: ig_caption = ig_caption[:2100] + "..."
+                            caption = f"{final_title}\n\n{description}"
+                            if len(caption) > 2100: caption = caption[:2100] + "..."
                             
-                            ig_uploader.upload_reel(public_url, ig_caption)
+                            # A. Instagram
+                            if ig_account:
+                                uploader.upload_instagram_reel(ig_account, public_url, caption)
+                            
+                            # B. Facebook
+                            if fb_page_id:
+                                uploader.upload_facebook_reel(fb_page_id, public_url, caption)
                             
                             # Cleanup Cloud
                             logger.info("   Cleaning up temp cloud file...")
@@ -454,10 +454,10 @@ class YouTubeShortsAutomation:
                         else:
                             logger.error("❌ Failed to parse HF URL")
                     else:
-                        logger.error("❌ Failed to upload temp video for Instagram")
+                        logger.error("❌ Failed to upload temp video for Social Media")
                         
                 except Exception as e:
-                    logger.error(f"❌ Instagram Upload Failed: {e}")
+                    logger.error(f"❌ Social Media Upload Failed: {e}")
 
             
             # Cleanup edited file
