@@ -33,6 +33,11 @@
     "category_id": "24",
     "privacy_status": "public"
   },
+  "instagram_upload": {
+    "enabled": false,
+    "access_token": "",
+    "account_id": ""
+  },
   "video_settings": {
     "segment_duration_seconds": 58,
     "max_segments_per_video": 999,
