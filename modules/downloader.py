@@ -31,6 +31,7 @@ class VideoDownloader:
         
         cmd = [
             'yt-dlp',
+            '--extractor-args', 'youtube:player_client=android,ios',
             '--cookies', 'youtube_cookies.txt',
             '-J',  # JSON output
             '--no-download',
@@ -113,6 +114,7 @@ class VideoDownloader:
         
         cmd = [
             'yt-dlp',
+            '--extractor-args', 'youtube:player_client=android,ios',  # Bypass challenges
             '--cookies', 'youtube_cookies.txt',
             '-f', format_str,
             '--merge-output-format', 'mp4',
